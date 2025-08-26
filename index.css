@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { scroll-behavior: smooth; }
+
+/* Custom CSS variables and global tweaks */
+:root {
+  /* Default palette: Emerald (theme) / Orange (accent) */
+  --theme-color: #059669; /* emerald-600 */
+  --accent-color: #f97316; /* orange-500 */
+}
+html, body, #root { height: 100%; }
+
+/* Theme classes */
+.bg-theme { background-color: var(--theme-color); }
+.bg-theme-light { background-color: color-mix(in srgb, var(--theme-color) 15%, white); }
+.text-theme { color: var(--theme-color); }
+.text-theme-light { color: color-mix(in srgb, var(--theme-color) 80%, black); }
+.border-theme { border-color: var(--theme-color); }
+.ring-theme { --tw-ring-color: var(--theme-color); }
+.ring-theme-light { --tw-ring-color: color-mix(in srgb, var(--theme-color) 40%, white); }
+
+.btn-theme { background-color: var(--theme-color); color: white; }
+.btn-theme:hover { background-color: color-mix(in srgb, var(--theme-color) 85%, black); }
+
+.gradient-theme {
+  background-image: linear-gradient(to right, var(--theme-color), var(--accent-color));
+}

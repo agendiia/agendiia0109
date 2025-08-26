@@ -1,0 +1,73 @@
+mindmap
+  root((Agendiia App))
+    Frontend
+      Landing
+        Hero
+        Recursos
+        Planos
+        components/LandingPage.tsx
+      PublicBooking
+        Booking Flow
+        Pagamento
+          Pix (QR + copia e cola)
+          Cartão (Stripe)
+        components/PublicBookingPage.tsx
+      Auth
+        Login / Signup
+        Verify Email
+        contexts/AuthContext.tsx
+      App (Profissional)
+        Sidebar
+        Dashboard
+        Agendamentos
+          Criar / Editar / Lista
+        Clientes
+          Perfil / Histórico
+        Perfil Profissional
+          Bio (máx 400)
+          components/Profile.tsx
+        Configurações
+          Geral (nome, telefone)
+          Notificações
+          Exportar Dados (CSV por tópico)
+          components/SettingsPage.tsx
+        Payments UI
+          components/PublicPaymentPage.tsx
+      Admin
+        Painel Admin
+        Funcionalidades avançadas
+        components/AdminPanel.tsx
+      Shared
+        UI Components
+        Icons
+        components/Icons.tsx
+        Hooks
+        hooks/useAsyncOperation.ts
+    Backend
+      Firebase
+        Auth
+        Firestore
+          users/{uid}
+            profile/main
+            appointments
+            clients
+            settings
+        Storage
+        Rules
+        firestore.rules
+      Cloud Functions
+        functions/
+    Services
+      brevoService (emails)
+      stripeService (checkout)
+      geminiService (AI -> bio)
+      firebase.ts (init)
+    Integrations
+      Payments (Stripe, MercadoPago)
+      Pix (payload + QR)
+    Dev / Tooling
+      Vite + React + TypeScript
+      Tailwind CSS
+      Framer Motion
+      package.json
+      vite.config.ts

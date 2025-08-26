@@ -1,0 +1,19 @@
+rules_version = '2';
+
+// Storage Security Rules for Firebase Storage
+// Allow authenticated users to upload and read their own profile images
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Profile images: public read for booking pages, writes only by the owner
+    match /users/{userId}/profile/{imageType}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Default: deny all other access
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
