@@ -230,8 +230,8 @@ const LandingPage: React.FC = () => {
         <p className="text-center text-gray-600 dark:text-gray-300 mt-2">Construído para profissionais independentes e clínicas.</p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-8">
           <FeatureCard
-            title="Página Pública de Agendamento"
-            desc="Seu link personalizado (/booking/<slug>) para clientes agendarem 24/7."
+            title="Página para Agendamento"
+            desc="Seu link personalizado para clientes agendarem 24/7."
             icon="📅"
             iconClass="bg-emerald-100 text-emerald-600"
             cardClass="bg-emerald-50 text-emerald-900 border-emerald-100 dark:bg-emerald-900 dark:text-emerald-100 dark:border-emerald-800"
@@ -259,21 +259,21 @@ const LandingPage: React.FC = () => {
           />
           <FeatureCard
             title="E-mails Automáticos"
-            desc="Confirmação no agendamento e lembrete ~24h antes — via Brevo."
+            desc="Confirmação no agendamento e lembretes para o cliente."
             icon="📧"
             iconClass="bg-pink-100 text-pink-600"
             cardClass="bg-pink-50 text-pink-900 border-pink-100 dark:bg-pink-900 dark:text-pink-100 dark:border-pink-800"
           />
           <FeatureCard
             title="Marketing com IA"
-            desc="Gere biografias, descrições e ideias de conteúdo com Gemini."
+            desc="Gere posts para redes sociais, anúncios, descrições e conteúdo com IA."
             icon="✨"
             iconClass="bg-purple-100 text-purple-600"
             cardClass="bg-purple-50 text-purple-900 border-purple-100 dark:bg-purple-900 dark:text-purple-100 dark:border-purple-800"
           />
           <FeatureCard
             title="Financeiro e Relatórios"
-            desc="Acompanhe recebimentos e métricas para decisões melhores."
+            desc="Acompanhe recebimentos e métricas para decisões melhores com IA."
             icon="📊"
             iconClass="bg-lime-100 text-lime-700"
             cardClass="bg-lime-50 text-lime-900 border-lime-100 dark:bg-lime-900 dark:text-lime-100 dark:border-lime-800"
@@ -287,7 +287,7 @@ const LandingPage: React.FC = () => {
           />
           <FeatureCard
             title="Personalização"
-            desc="Cores do tema, banner e avatar — sua marca em primeiro plano."
+            desc="Personalize sua página de agendamento — sua marca em primeiro plano."
             icon="🎨"
             iconClass="bg-amber-50 text-amber-600"
             cardClass="bg-amber-50 text-amber-900 border-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-800"
