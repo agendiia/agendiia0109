@@ -63,29 +63,38 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView }) => {
   const goAdmin = () => { window.location.href = '/admin'; };
 
   return (
-    <aside className="w-64 h-full bg-emerald-100 dark:bg-slate-900 flex flex-col border-r border-emerald-200 dark:border-gray-700">
-      <div className="flex items-center justify-center h-20 border-b border-emerald-200 dark:border-gray-700">
-        <img src="/logo.png" alt="Agendiia" className="h-12 w-auto" />
+    <>
+      <div className="hidden md:flex md:flex-col w-64 bg-gray-50 h-screen">
+        <aside className="w-64 h-full bg-emerald-100 dark:bg-slate-900 flex flex-col border-r border-emerald-200 dark:border-gray-700">
+          <div className="flex items-center justify-center h-20 border-b border-emerald-200 dark:border-gray-700">
+            <img src="/logo.png" alt="Agendiia" className="h-12 w-auto" />
+          </div>
+          <nav className="flex-1 px-4 py-4">
+            <ul>
+              {navItems.map((item) => (
+                <NavItem
+                  key={item.id}
+                  icon={item.icon}
+                  label={item.label}
+                  isActive={currentView === item.id}
+                  onClick={() => setCurrentView(item.id)}
+                  isLocked={item.isLocked}
+                />
+              ))}
+            </ul>
+            <div className="my-4 border-t border-gray-200 dark:border-gray-700"></div>
+            <ul>
+              
+            </ul>
+          </nav>
+        </aside>
       </div>
-      <nav className="flex-1 px-4 py-4">
-        <ul>
-          {navItems.map((item) => (
-            <NavItem
-              key={item.id}
-              icon={item.icon}
-              label={item.label}
-              isActive={currentView === item.id}
-              onClick={() => setCurrentView(item.id)}
-              isLocked={item.isLocked}
-            />
-          ))}
-        </ul>
-        <div className="my-4 border-t border-gray-200 dark:border-gray-700"></div>
-        <ul>
-          
-        </ul>
-      </nav>
-    </aside>
+
+      {/* Mobile: optional top/bottom nav or hamburger - keep layout stable */}
+      <div className="md:hidden">
+        {/* You can add a small bottom nav or hamburger toggle here */}
+      </div>
+    </>
   );
 };
 

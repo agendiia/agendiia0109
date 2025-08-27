@@ -1087,42 +1087,40 @@ const EnterDetails: React.FC<{onSubmit: (details: any) => void, onBack: () => vo
              <button onClick={onBack} className="flex items-center text-sm text-[var(--theme-color)] dark:text-[var(--theme-color)]/90 font-semibold mb-4"><ArrowLeft className="h-4 w-4 mr-1"/> Voltar</button>
             <h2 className="text-2xl font-bold mb-1">Seus Detalhes</h2>
             <p className="text-gray-500 dark:text-gray-400 mb-6">Preencha suas informações para concluir o agendamento.</p>
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <FormInput 
-                    icon={<User/>} 
-                    label="Nome Completo" 
-                    name="name" 
-                    value={details.name} 
-                    onChange={handleChange}
-                    onBlur={handleBlur}
-                    error={touched.name ? errors.name : undefined}
-                    required 
-                />
-                <FormInput 
-                    icon={<Mail/>} 
-                    label="E-mail" 
-                    name="email" 
-                    value={details.email} 
-                    onChange={handleChange}
-                    onBlur={handleBlur}
-                    error={touched.email ? errors.email : undefined}
-                    type="email" 
-                    required 
-                />
-                <FormInput 
-                    icon={<Phone/>} 
-                    label="Telefone (WhatsApp)" 
-                    name="phone" 
-                    value={details.phone} 
-                    onChange={handleChange}
-                    onBlur={handleBlur}
-                    error={touched.phone ? errors.phone : undefined}
-                    required 
-                />
-                <button type="submit" className="w-full bg-[var(--theme-color)] text-white font-bold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity mt-4">
-                    Continuar
-                </button>
-            </form>
+            <form className="space-y-4">
+  <div className="flex flex-col md:flex-row md:space-x-4">
+    <input
+      type="text"
+      name="clientName"
+      placeholder="Nome"
+      className="w-full md:w-1/2 px-3 py-2 border rounded"
+    />
+    <input
+      type="tel"
+      name="clientPhone"
+      placeholder="Telefone"
+      className="w-full md:w-1/2 px-3 py-2 border rounded mt-2 md:mt-0"
+    />
+  </div>
+
+  <div className="flex flex-col md:flex-row md:space-x-4">
+    <input
+      type="email"
+      name="clientEmail"
+      placeholder="Email"
+      className="w-full md:w-1/2 px-3 py-2 border rounded"
+    />
+    <select className="w-full md:w-1/2 px-3 py-2 border rounded mt-2 md:mt-0">
+      {/* ...service options... */}
+    </select>
+  </div>
+
+  <textarea className="w-full px-3 py-2 border rounded" placeholder="Observações (opcional)" />
+
+  <button type="submit" className="w-full md:w-auto px-4 py-3 bg-indigo-600 text-white rounded">
+    Reservar
+  </button>
+</form>
         </div>
     );
 };

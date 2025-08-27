@@ -1,0 +1,6 @@
+/* ...existing code... */
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+/* ...existing code... */

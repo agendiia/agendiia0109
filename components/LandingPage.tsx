@@ -2,12 +2,25 @@ import React from 'react';
 import { motion } from 'framer-motion';
 
 const Section: React.FC<{ id?: string; className?: string; children: React.ReactNode }> = ({ id, className, children }) => (
-  <motion.section id={id} className={`max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 ${className || ''}`}
-    initial={{ opacity: 0, y: 20 }}
-    whileInView={{ opacity: 1, y: 0 }}
-    viewport={{ once: true, amount: 0.15 }}
-    transition={{ duration: 0.5 }}
-  >{children}</motion.section>
+  <section id={id} className={`w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ${className || ''}`}>
+    {children}
+  </section>
+);
+
+export const LandingHeader: React.FC = () => (
+  <header className="w-full bg-white shadow-sm">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+      <a href="/" className="flex items-center gap-3">
+        <img src="/logo.png" alt="Agendiia" className="h-10 sm:h-12 md:h-16 w-auto" />
+      </a>
+      <nav className="hidden md:flex items-center space-x-6">
+        {/* ...existing nav links... */}
+      </nav>
+      <div className="md:hidden">
+        {/* mobile menu button (rendered by Sidebar / Menu) */}
+      </div>
+    </div>
+  </header>
 );
 
 const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className, children, ...props }) => (
@@ -69,25 +82,7 @@ const LandingPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100">
       {/* NAVBAR */}
-      <header className="sticky top-0 backdrop-blur bg-white/80 dark:bg-gray-900/70 border-b border-gray-100 dark:border-gray-800 z-30">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <a href="#" className="flex items-center gap-2">
-            <img src="/logo.png" alt="Agendiia" className="h-12 md:h-14 w-auto" />
-          </a>
-          <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a href="#recursos" className="hover:text-theme">Recursos</a>
-            <a href="#como-funciona" className="hover:text-theme">Como funciona</a>
-            <a href="#planos" className="hover:text-theme">Planos</a>
-            <a href="#depoimentos" className="hover:text-theme">Depoimentos</a>
-            <a href="#faq" className="hover:text-theme">FAQ</a>
-            <a href="#contato" className="hover:text-theme">Contato</a>
-            <a href="/login" className="hover:text-theme">Login</a>
-          </nav>
-          <div className="flex items-center gap-3">
-            <PrimaryButton onClick={() => { window.location.href = '/login?signup=1'; }}>Testar grátis</PrimaryButton>
-          </div>
-        </div>
-      </header>
+      <LandingHeader />
 
       {/* HERO */}
       <Section className="py-16 sm:py-24">
@@ -230,8 +225,8 @@ const LandingPage: React.FC = () => {
         <p className="text-center text-gray-600 dark:text-gray-300 mt-2">Construído para profissionais independentes e clínicas.</p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-8">
           <FeatureCard
-            title="Página para Agendamento"
-            desc="Seu link personalizado para clientes agendarem 24/7."
+            title="Página Pública de Agendamento"
+            desc="Seu link personalizado (/booking/<slug>) para clientes agendarem 24/7."
             icon="📅"
             iconClass="bg-emerald-100 text-emerald-600"
             cardClass="bg-emerald-50 text-emerald-900 border-emerald-100 dark:bg-emerald-900 dark:text-emerald-100 dark:border-emerald-800"
@@ -259,21 +254,21 @@ const LandingPage: React.FC = () => {
           />
           <FeatureCard
             title="E-mails Automáticos"
-            desc="Confirmação no agendamento e lembretes para o cliente."
+            desc="Confirmação no agendamento e lembrete ~24h antes — via Brevo."
             icon="📧"
             iconClass="bg-pink-100 text-pink-600"
             cardClass="bg-pink-50 text-pink-900 border-pink-100 dark:bg-pink-900 dark:text-pink-100 dark:border-pink-800"
           />
           <FeatureCard
             title="Marketing com IA"
-            desc="Gere posts para redes sociais, anúncios, descrições e conteúdo com IA."
+            desc="Gere biografias, descrições e ideias de conteúdo com Gemini."
             icon="✨"
             iconClass="bg-purple-100 text-purple-600"
             cardClass="bg-purple-50 text-purple-900 border-purple-100 dark:bg-purple-900 dark:text-purple-100 dark:border-purple-800"
           />
           <FeatureCard
             title="Financeiro e Relatórios"
-            desc="Acompanhe recebimentos e métricas para decisões melhores com IA."
+            desc="Acompanhe recebimentos e métricas para decisões melhores."
             icon="📊"
             iconClass="bg-lime-100 text-lime-700"
             cardClass="bg-lime-50 text-lime-900 border-lime-100 dark:bg-lime-900 dark:text-lime-100 dark:border-lime-800"
@@ -287,7 +282,7 @@ const LandingPage: React.FC = () => {
           />
           <FeatureCard
             title="Personalização"
-            desc="Personalize sua página de agendamento — sua marca em primeiro plano."
+            desc="Cores do tema, banner e avatar — sua marca em primeiro plano."
             icon="🎨"
             iconClass="bg-amber-50 text-amber-600"
             cardClass="bg-amber-50 text-amber-900 border-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-800"
