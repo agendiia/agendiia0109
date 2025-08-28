@@ -252,10 +252,16 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
       const name = ap.clientName || 'Cliente';
       const serviceName = ap.service || 'Atendimento';
       const dt: Date = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+
+      // Fetch professional's name
+      const userId = docSnap.ref.path.split('/')[1];
+      const userDoc = await db.doc(`users/${userId}`).get();
+      const professionalName = userDoc.exists ? (userDoc.data() as any)?.name || 'Seu Profissional' : 'Seu Profissional';
+
       // Load template (once would be better, but keep simple)
       const autoSnap = await db.doc('platform/automations').get();
       let subject = 'Lembrete do seu agendamento';
-      let body = 'Olá, {clientName}! Passando para lembrar do seu horário de {serviceName} em {dateTime}. Por favor, responda SIM para confirmar.';
+      let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {date}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {time}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
       if (autoSnap.exists) {
         const au: any = autoSnap.data();
         const tmpl = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_remind') : null;
@@ -266,7 +272,9 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
         clientName: name,
         serviceName,
         dateTime: formatDateTimePtBR(dt),
+        date: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
         time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+        professionalName,
       };
       try {
         await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
@@ -656,10 +664,39 @@ async function assertIsPlatformAdmin(ctx: any) {
   const userRec = await admin.auth().getUser(uid).catch(() => null);
   const email = userRec?.email?.toLowerCase();
   if (!email) throw new HttpsError('permission-denied', 'Sem e-mail');
-  const settingsSnap = await admin.firestore().doc('platform_settings').get();
-  const admins: string[] = (settingsSnap.exists ? (settingsSnap.data() as any).adminEmails : []) || [];
-  const fallback = ['admin@agendiia.com.br', 'contato@agendiia.com.br'];
-  const allowed = new Set([...admins.map(e => e.toLowerCase()), ...fallback]);
+  // Read settings from either 'platform/settings' (modern) or 'platform_settings' (legacy).
+  const extractEmails = (data: any): string[] => {
+    if (!data) return [];
+    if (typeof data === 'string') return [data];
+    if (Array.isArray(data)) return data;
+    if (data.adminEmails) {
+      if (Array.isArray(data.adminEmails)) return data.adminEmails;
+      if (typeof data.adminEmails === 'string') return [data.adminEmails];
+    }
+    if (data.emails) {
+      if (Array.isArray(data.emails)) return data.emails;
+      if (typeof data.emails === 'string') return [data.emails];
+    }
+    if (data.email && typeof data.email === 'string') return [data.email];
+    return [];
+  };
+
+  const settingsRef1 = admin.firestore().doc('platform/settings');
+  // legacy: try collection 'platform_settings' doc 'settings'
+  const settingsRef2 = admin.firestore().doc('platform_settings/settings');
+  const snap1 = await settingsRef1.get().catch(() => null);
+  let admins: string[] = [];
+  if (snap1 && snap1.exists) {
+    admins = extractEmails(snap1.data());
+  }
+  if (!admins || admins.length === 0) {
+    const snap2 = await settingsRef2.get().catch(() => null);
+    if (snap2 && snap2.exists) {
+      admins = extractEmails(snap2.data());
+    }
+  }
+  const fallback = ['admin@agendiia.com.br', 'contato@agendiia.com.br', 'contato@agendiia'];
+  const allowed = new Set([...(admins || []).map((e: any) => (typeof e === 'string' ? e.toLowerCase() : '')), ...fallback]);
   if (!allowed.has(email)) throw new HttpsError('permission-denied', 'Acesso restrito');
   return { uid, email };
 }

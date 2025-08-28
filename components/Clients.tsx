@@ -677,25 +677,50 @@ const ClientCommunicationModal: React.FC<{
         if (!comm.body) return;
         setIsSending(channel);
         setStatusMessage(null);
-        try {
-            const response = channel === 'email' 
-                ? await sendEmail(client, comm.subject, comm.body)
-                : await sendWhatsApp(client, comm.body);
+
+        if (channel === 'email') {
+            try {
+                const response = await sendEmail(client, comm.subject, comm.body);
+                setStatusMessage({ type: 'success', text: response });
+                onSendSuccess({
+                    channel: 'Email',
+                    type: type,
+                    subject: comm.subject,
+                    content: comm.body,
+                    date: new Date(),
+                });
+                setTimeout(onClose, 2000);
+            } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : 'Falha ao enviar a mensagem.';
+                setStatusMessage({ type: 'error', text: errorMessage });
+            } finally {
+                setIsSending(null);
+            }
+        } else if (channel === 'whatsapp') {
+            if (!client.phone) {
+                setStatusMessage({ type: 'error', text: 'O número de telefone do cliente não foi encontrado.' });
+                setIsSending(null);
+                return;
+            }
             
-            setStatusMessage({ type: 'success', text: response });
+            const cleanedPhone = client.phone.replace(/\D/g, '');
+            const message = encodeURIComponent(comm.body);
+            const whatsappUrl = `https://wa.me/${cleanedPhone}?text=${message}`;
+            
+            window.open(whatsappUrl, '_blank');
+            setStatusMessage({ type: 'success', text: 'WhatsApp aberto para envio manual.' });
+            
             onSendSuccess({
-                channel: channel === 'email' ? 'Email' : 'WhatsApp',
+                channel: 'WhatsApp',
                 type: type,
-                subject: channel === 'email' ? comm.subject : undefined,
                 content: comm.body,
                 date: new Date(),
             });
-            setTimeout(onClose, 2000);
-        } catch (e) {
-            const errorMessage = e instanceof Error ? e.message : 'Falha ao enviar a mensagem.';
-            setStatusMessage({ type: 'error', text: errorMessage });
-        } finally {
-            setIsSending(null);
+
+            setTimeout(() => {
+                setIsSending(null);
+                onClose();
+            }, 3000);
         }
     };
 

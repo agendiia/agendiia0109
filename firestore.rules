@@ -8,66 +8,56 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
-    // --- Regra Geral para Donos ---
-    // Por padrão, um usuário logado pode fazer tudo com seus próprios dados.
-    // Isso cria uma base segura para todos os documentos e subcoleções.
-    // As regras de acesso público abaixo darão permissões adicionais e específicas.
+    // --- PUBLIC WRITE ACCESS (must come before general rules) ---
+    // Allow public creation of testimonials and appointments
+    match /users/{userId}/testimonials/{testimonialId} {
+      allow create: if request.resource.data.status == 'pending'
+                    && request.resource.data.keys().hasAll(['name', 'rating', 'text', 'serviceId']);
+    }
+
+    match /users/{userId}/appointments/{appointmentId} {
+      allow create: if true; // Allow anyone to create appointments
+    }
+
+    match /users/{userId}/reservations/{reservationId} {
+      allow create: if true; // Allow anyone to create reservations
+      allow update: if true; // Allow updating reservations for payment status
+    }
+
+    // --- PUBLIC READ ACCESS FOR ALL USER DATA ---
+    // Allow anyone to read all user documents and subcollections for public booking
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /users/{userId}/{documents=**} {
+      allow read: if true;
+      // Do not set write to false here as it would override specific write rules above
+    }
+
+    // --- OWNER ACCESS ---
+    // Owners can read and write their own data
     match /users/{userId}/{documents=**} {
       allow read, write: if isOwner(userId);
     }
 
-    // --- Regras de Leitura Pública (para Páginas de Agendamento, etc.) ---
-
-    // Qualquer pessoa pode ler o perfil principal, serviços, disponibilidade e informações de pagamento de um profissional.
-    // 'get' permite ler um documento específico, e 'list' permite consultar a coleção (necessário para mostrar todos os serviços).
-    match /users/{userId}/profile/main {
-      allow get: if true;
-    }
-    match /users/{userId}/services/{serviceId} {
-      allow get, list: if true;
-    }
-    match /users/{userId}/availability/{docId} {
-      allow get, list: if true;
-    }
-    match /users/{userId}/service_availability/{serviceId} {
-      allow get, list: if true;
-    }
-    match /users/{userId}/availability_exceptions/{exceptionId} {
-      allow get, list: if true;
-    }
-    match /users/{userId}/payment_gateways/{gatewayId} {
-      allow get, list: if true;
-    }
-
-    // Qualquer pessoa pode ler depoimentos *aprovados*.
-    // A consulta no app DEVE incluir `where('status', '==', 'approved')`.
-    match /users/{userId}/testimonials/{testimonialId} {
-      allow get: if resource.data.status == 'approved';
-      allow list: if true; // A query no cliente DEVE ser segura.
-    }
-
-
-    // --- Regras de Escrita Pública ---
-
-    // Qualquer pessoa pode criar um depoimento, mas ele deve ser criado com o status 'pending'.
-    match /users/{userId}/testimonials/{testimonialId} {
-        allow create: if request.resource.data.status == 'pending'
-                      && request.resource.data.keys().hasAll(['name', 'rating', 'text', 'serviceId']);
-    }
-
-    // Qualquer pessoa pode criar um agendamento, desde que os campos obrigatórios estejam presentes.
-    // Isso evita a criação de dados incompletos ou maliciosos.
-    match /users/{userId}/appointments/{appointmentId} {
-      allow create: if request.resource.data.keys().hasAll(['clientName', 'clientEmail', 'clientPhone', 'serviceId', 'dateTime', 'status'])
-                    && request.resource.data.status == 'pending'; // Agendamentos devem começar como pendentes
-    }
-
-    // --- Regras de Admin ---
-    // Exemplo para um painel de administração, assumindo que uma custom claim 'admin' foi definida no token do usuário.
+    // --- ADMIN RULES ---
     match /admins/{docId} {
       allow read, write: if request.auth.token.admin == true;
     }
-    
-    // Qualquer caminho não combinado explicitamente acima será negado por padrão.
+
+    match /platform/{docId} {
+      allow get, create: if request.auth != null;
+    }
+
+    match /platform_settings/{docId} {
+      allow get, create: if request.auth != null;
+    }
+
+    // --- PUBLIC SLUGS ---
+    match /public_slugs/{slug} {
+      allow read: if true;
+    }
   }
 }

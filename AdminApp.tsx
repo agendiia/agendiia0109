@@ -17,22 +17,57 @@ const AdminApp: React.FC = () => {
         return;
       }
       try {
-        const FALLBACK_ADMINS = ['admin@agendiia.com.br', 'contato@agendiia.com.br'];
-        const settingsRef = doc(db, 'platform', 'settings');
-        const docSnap = await getDoc(settingsRef);
+        const FALLBACK_ADMINS = ['admin@agendiia.com.br', 'contato@agendiia.com.br', 'contato@agendiia'];
+
+        // helper to extract emails from various shapes stored in Firestore
+        const extractEmails = (data: any): string[] => {
+          if (!data) return [];
+          if (typeof data === 'string') return [data];
+          if (Array.isArray(data)) return data;
+          if (data.adminEmails) {
+            if (Array.isArray(data.adminEmails)) return data.adminEmails;
+            if (typeof data.adminEmails === 'string') return [data.adminEmails];
+          }
+          if (data.emails) {
+            if (Array.isArray(data.emails)) return data.emails;
+            if (typeof data.emails === 'string') return [data.emails];
+          }
+          if (data.email && typeof data.email === 'string') return [data.email];
+          return [];
+        };
+
+        // Try the modern doc path first (collection 'platform', doc 'settings'), then legacy 'platform_settings'
+  const settingsRef1 = doc(db, 'platform', 'settings');
+  // legacy path: try a collection 'platform_settings' with doc 'settings' to avoid invalid single-segment doc refs
+  const settingsRef2 = doc(db, 'platform_settings', 'settings');
+
         let emails: string[] = [];
-        if (docSnap.exists()) {
-          const settingsData = docSnap.data();
-          emails = Array.isArray(settingsData.adminEmails) ? settingsData.adminEmails : [];
-        } else {
-          // create settings doc with fallback admins so platform is manageable
-          await setDoc(settingsRef, { adminEmails: FALLBACK_ADMINS, createdAt: new Date().toISOString() }, { merge: true });
+
+        const snap1 = await getDoc(settingsRef1).catch(() => null);
+        if (snap1 && snap1.exists()) {
+          emails = extractEmails(snap1.data());
+        }
+
+        // If nothing useful found, try legacy path
+        if (!emails || emails.length === 0) {
+          const snap2 = await getDoc(settingsRef2).catch(() => null);
+          if (snap2 && snap2.exists()) {
+            emails = extractEmails(snap2.data());
+          }
+        }
+
+        // If still empty, create/update the modern settings doc with FALLBACK_ADMINS
+        if (!emails || emails.length === 0) {
+          await setDoc(settingsRef1, { adminEmails: FALLBACK_ADMINS, createdAt: new Date().toISOString() }, { merge: true });
           emails = FALLBACK_ADMINS;
         }
-        if (emails.length === 0) emails = FALLBACK_ADMINS; // ensure at least fallback
-        const userEmail = (user.email || '').toLowerCase();
-        const normalizedEmails = emails.map(e => (typeof e === 'string' ? e.toLowerCase() : '')).filter(Boolean);
-        setAllowed(normalizedEmails.includes(userEmail));
+
+  const userEmail = (user.email || '').toLowerCase();
+  const normalizedEmails = emails.map((e: any) => (typeof e === 'string' ? e.toLowerCase() : '')).filter(Boolean);
+  // debug logs to help troubleshoot admin access
+  console.debug('[AdminApp] extracted admin emails:', normalizedEmails);
+  console.debug('[AdminApp] current user email:', userEmail);
+  setAllowed(normalizedEmails.includes(userEmail));
       } catch (e) {
         console.error('Erro ao verificar acesso de administrador:', e);
         setAllowed(false);

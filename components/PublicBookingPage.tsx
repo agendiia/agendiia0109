@@ -1087,40 +1087,55 @@ const EnterDetails: React.FC<{onSubmit: (details: any) => void, onBack: () => vo
              <button onClick={onBack} className="flex items-center text-sm text-[var(--theme-color)] dark:text-[var(--theme-color)]/90 font-semibold mb-4"><ArrowLeft className="h-4 w-4 mr-1"/> Voltar</button>
             <h2 className="text-2xl font-bold mb-1">Seus Detalhes</h2>
             <p className="text-gray-500 dark:text-gray-400 mb-6">Preencha suas informações para concluir o agendamento.</p>
-            <form className="space-y-4">
-  <div className="flex flex-col md:flex-row md:space-x-4">
-    <input
-      type="text"
-      name="clientName"
-      placeholder="Nome"
-      className="w-full md:w-1/2 px-3 py-2 border rounded"
-    />
-    <input
-      type="tel"
-      name="clientPhone"
-      placeholder="Telefone"
-      className="w-full md:w-1/2 px-3 py-2 border rounded mt-2 md:mt-0"
-    />
-  </div>
-
-  <div className="flex flex-col md:flex-row md:space-x-4">
-    <input
-      type="email"
-      name="clientEmail"
-      placeholder="Email"
-      className="w-full md:w-1/2 px-3 py-2 border rounded"
-    />
-    <select className="w-full md:w-1/2 px-3 py-2 border rounded mt-2 md:mt-0">
-      {/* ...service options... */}
-    </select>
-  </div>
-
-  <textarea className="w-full px-3 py-2 border rounded" placeholder="Observações (opcional)" />
-
-  <button type="submit" className="w-full md:w-auto px-4 py-3 bg-indigo-600 text-white rounded">
-    Reservar
-  </button>
-</form>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <FormInput
+                    label="Nome Completo"
+                    name="name"
+                    value={details.name}
+                    onChange={handleChange}
+                    onBlur={handleBlur}
+                    error={errors.name}
+                    icon={<User className="h-5 w-5" />}
+                    required
+                />
+                <FormInput
+                    label="Email"
+                    name="email"
+                    type="email"
+                    value={details.email}
+                    onChange={handleChange}
+                    onBlur={handleBlur}
+                    error={errors.email}
+                    icon={<Mail className="h-5 w-5" />}
+                    required
+                />
+                <FormInput
+                    label="Telefone"
+                    name="phone"
+                    type="tel"
+                    value={details.phone}
+                    onChange={handleChange}
+                    onBlur={handleBlur}
+                    error={errors.phone}
+                    icon={<Phone className="h-5 w-5" />}
+                    required
+                />
+                <div className="flex flex-col sm:flex-row gap-4 pt-4">
+                    <button
+                        type="button"
+                        onClick={onBack}
+                        className="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                        Voltar
+                    </button>
+                    <button
+                        type="submit"
+                        className="flex-1 px-6 py-3 bg-[var(--theme-color)] text-white rounded-lg font-medium hover:opacity-90 transition-opacity"
+                    >
+                        Continuar
+                    </button>
+                </div>
+            </form>
         </div>
     );
 };

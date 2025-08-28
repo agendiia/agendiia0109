@@ -573,7 +573,7 @@ const Appointments: React.FC = () => {
             <span>Novo Agendamento</span>
                         </button>
                         <button onClick={() => setShowLegend(s => !s)} className="border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1 text-sm">{showLegend ? 'Ocultar Legenda' : 'Mostrar Legenda'}</button>
-                        <button onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: { view: 'settings' } }))} className="border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1 text-sm">Abrir Configurações</button>
+                        {/* 'Abrir Configurações' removido deliberadamente */}
                     </div>
         </div>
 
@@ -1075,95 +1075,75 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ appointment, onSave
             ...formData,
             id: appointment?.id || '',
             dateTime: new Date(formData.dateTime),
-            price: Number(formData.price),
-            duration: Number(formData.duration),
+            // Use default values for removed fields
+            price: 0,
+            duration: 60,
+            modality: 'Presencial' as 'Online' | 'Presencial',
+            clientEmail: formData.clientEmail || '',
+            clientPhone: formData.clientPhone || '',
         } as Appointment);
     };
 
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center p-4" onClick={onClose}>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                    <h2 className="text-xl font-bold text-gray-800 dark:text-white mb-6">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-4 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                <form onSubmit={handleSubmit} className="space-y-3">
+                    <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-4">
                         {appointment && appointment.id ? 'Editar Agendamento' : 'Novo Agendamento'}
                     </h2>
                     
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label htmlFor="clientName" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cliente</label>
-                                                {clients.length > 0 ? (
-                                                    <select name="clientName" id="clientName" value={formData.clientName} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
-                                                        <option value="" disabled>Selecione um cliente</option>
-                                                        {clients.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                                    </select>
-                                                ) : (
-                                                    <input name="clientName" id="clientName" value={formData.clientName} onChange={handleChange} required placeholder="Digite o nome do cliente" className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
-                                                )}
-                                            </div>
-
-                                            <div>
-                                                <label htmlFor="clientEmail" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">E-mail</label>
-                                                <input name="clientEmail" id="clientEmail" value={formData.clientEmail} onChange={handleChange} placeholder="exemplo@cliente.com" className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600" />
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label htmlFor="service" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Serviço</label>
-                                                {services.length > 0 ? (
-                                                    <select name="service" id="service" value={formData.service} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
-                                                        <option value="" disabled>Selecione um serviço</option>
-                                                        {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                                                    </select>
-                                                ) : (
-                                                    <input name="service" id="service" value={formData.service} onChange={handleChange} required placeholder="Digite o serviço" className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
-                                                )}
-                                            </div>
-
-                                            <div>
-                                                <label htmlFor="clientPhone" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Telefone</label>
-                                                <input name="clientPhone" id="clientPhone" value={formData.clientPhone} onChange={handleChange} placeholder="(11) 9xxxx-xxxx" className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600" />
-                                            </div>
-                                        </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="space-y-3">
                         <div>
-                            <label htmlFor="dateTime" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Data e Hora</label>
-                            <input type="datetime-local" name="dateTime" id="dateTime" value={formData.dateTime} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
+                            <label htmlFor="clientName" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Cliente</label>
+                            {clients.length > 0 ? (
+                                <select name="clientName" id="clientName" value={formData.clientName} onChange={handleChange} required className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
+                                    <option value="" disabled>Selecione um cliente</option>
+                                    {clients.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                </select>
+                            ) : (
+                                <input name="clientName" id="clientName" value={formData.clientName} onChange={handleChange} required placeholder="Digite o nome do cliente" className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
+                            )}
                         </div>
 
                         <div>
-                            <label htmlFor="modality" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Modalidade</label>
-                            <select name="modality" id="modality" value={formData.modality} onChange={handleChange} className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
-                                <option value="Online">Online</option>
-                                <option value="Presencial">Presencial</option>
-                            </select>
+                            <label htmlFor="service" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Serviço</label>
+                            {services.length > 0 ? (
+                                <select name="service" id="service" value={formData.service} onChange={handleChange} required className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
+                                    <option value="" disabled>Selecione um serviço</option>
+                                    {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                </select>
+                            ) : (
+                                <input name="service" id="service" value={formData.service} onChange={handleChange} required placeholder="Digite o serviço" className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
+                            )}
                         </div>
 
                         <div>
-                            <label htmlFor="status" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
-                            <select name="status" id="status" value={formData.status} onChange={handleChange} className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
+                            <label htmlFor="clientEmail" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">E-mail do Cliente (consulta)</label>
+                            <input name="clientEmail" id="clientEmail" value={formData.clientEmail} onChange={handleChange} placeholder="exemplo@cliente.com" className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600" />
+                        </div>
+
+                        <div>
+                            <label htmlFor="clientPhone" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Telefone do Cliente (consulta)</label>
+                            <input name="clientPhone" id="clientPhone" value={formData.clientPhone} onChange={handleChange} placeholder="(11) 12345-6789" className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600" />
+                        </div>
+
+                        <div>
+                            <label htmlFor="dateTime" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Data e Hora</label>
+                            <input type="datetime-local" name="dateTime" id="dateTime" value={formData.dateTime} onChange={handleChange} required className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
+                        </div>
+
+                        <div>
+                            <label htmlFor="status" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
+                            <select name="status" id="status" value={formData.status} onChange={handleChange} className="w-full p-2 text-sm rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
                                {Object.values(AppointmentStatus).map(s => <option key={s} value={s}>{s}</option>)}
                             </select>
                         </div>
-                        {/* paymentStatus intentionally removed from modal per UX request */}
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
-                        <div>
-                            <label htmlFor="duration" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Duração (min)</label>
-                            <input type="number" name="duration" id="duration" value={formData.duration} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
-                        </div>
-                        <div>
-                            <label htmlFor="price" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Preço (R$)</label>
-                            <input type="number" name="price" id="price" value={formData.price} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
-                        </div>
-                    </div>
-
-                    <div className="mt-8 flex justify-end space-x-3">
-                        <button type="button" onClick={onClose} className="py-2 px-4 rounded-lg bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-500">Cancelar</button>
-                        <button type="submit" className="py-2 px-4 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Salvar</button>
+                    <div className="mt-6 flex justify-end space-x-2">
+                        <button type="button" onClick={onClose} className="py-2 px-3 text-sm rounded-lg bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-500">Cancelar</button>
+                        <button type="submit" className="py-2 px-3 text-sm rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700">Salvar Agendamento</button>
                     </div>
                 </form>
             </div>
@@ -1216,20 +1196,40 @@ const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => vo
 
         setIsSending(channel);
         setStatusMessage(null);
-        try {
-            let response;
-            if (channel === 'email') {
-                response = await sendEmail(client, generatedComm.subject, generatedComm.body);
-            } else {
-                response = await sendWhatsApp(client, generatedComm.body);
+
+        if (channel === 'email') {
+            try {
+                const response = await sendEmail(client, generatedComm.subject, generatedComm.body);
+                setStatusMessage({ type: 'success', text: response });
+                setTimeout(() => setStatusMessage(null), 4000);
+            } catch (e) {
+                setStatusMessage({ type: 'error', text: 'Falha ao enviar a mensagem.' });
+                console.error(e);
+            } finally {
+                setIsSending(null);
             }
-            setStatusMessage({ type: 'success', text: response });
-            setTimeout(() => setStatusMessage(null), 4000);
-        } catch (e) {
-            setStatusMessage({ type: 'error', text: 'Falha ao enviar a mensagem.' });
-            console.error(e);
-        } finally {
-            setIsSending(null);
+        } else if (channel === 'whatsapp') {
+            // Prioritize phone from client record, fallback to appointment record
+            const phone = client.phone || appointment.clientPhone;
+            if (!phone) {
+                setStatusMessage({ type: 'error', text: 'O número de telefone do cliente não foi encontrado.' });
+                setIsSending(null);
+                return;
+            }
+            
+            // Clean the phone number: remove all non-digit characters
+            const cleanedPhone = phone.replace(/\D/g, '');
+            const message = encodeURIComponent(generatedComm.body);
+            const whatsappUrl = `https://wa.me/${cleanedPhone}?text=${message}`;
+            
+            window.open(whatsappUrl, '_blank');
+            setStatusMessage({ type: 'success', text: 'WhatsApp aberto para envio manual.' });
+            
+            // Reset sending state after a short delay
+            setTimeout(() => {
+                setIsSending(null);
+                setStatusMessage(null);
+            }, 3000);
         }
     };
 

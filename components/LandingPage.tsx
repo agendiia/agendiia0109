@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 
 const Section: React.FC<{ id?: string; className?: string; children: React.ReactNode }> = ({ id, className, children }) => (
@@ -7,21 +7,64 @@ const Section: React.FC<{ id?: string; className?: string; children: React.React
   </section>
 );
 
-export const LandingHeader: React.FC = () => (
-  <header className="w-full bg-white shadow-sm">
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
-      <a href="/" className="flex items-center gap-3">
-        <img src="/logo.png" alt="Agendiia" className="h-10 sm:h-12 md:h-16 w-auto" />
-      </a>
-      <nav className="hidden md:flex items-center space-x-6">
-        {/* ...existing nav links... */}
-      </nav>
-      <div className="md:hidden">
-        {/* mobile menu button (rendered by Sidebar / Menu) */}
+export const LandingHeader: React.FC = () => {
+  const [open, setOpen] = useState(false);
+
+  const MenuLinks = () => (
+    <>
+      <a href="/#recursos" className="text-sm font-medium text-gray-700 hover:text-gray-900">Recursos</a>
+      <a href="/#como-funciona" className="text-sm font-medium text-gray-700 hover:text-gray-900">Como funciona</a>
+      <a href="/#planos" className="text-sm font-medium text-gray-700 hover:text-gray-900">Planos</a>
+      <a href="/#depoimentos" className="text-sm font-medium text-gray-700 hover:text-gray-900">Depoimentos</a>
+      <a href="/#faq" className="text-sm font-medium text-gray-700 hover:text-gray-900">FAQ</a>
+      <a href="/#contato" className="text-sm font-medium text-gray-700 hover:text-gray-900">Contato</a>
+      <a href="/login" className="ml-2 inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">Login</a>
+    </>
+  );
+
+  return (
+    <header className="w-full bg-white shadow-sm">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+        <a href="/" className="flex items-center gap-3">
+          <img src="/logo.png" alt="Agendiia" className="h-10 sm:h-12 md:h-16 w-auto" />
+        </a>
+
+        {/* Desktop nav */}
+        <nav className="hidden md:flex items-center space-x-6">
+          <MenuLinks />
+        </nav>
+
+        {/* Mobile menu button */}
+        <div className="md:hidden flex items-center">
+          <button
+            onClick={() => setOpen(!open)}
+            aria-label="Abrir menu"
+            className="p-2 rounded-md text-gray-700 hover:bg-gray-100"
+          >
+            {open ? (
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
-    </div>
-  </header>
-);
+
+      {/* Mobile menu content */}
+      {open && (
+        <div className="md:hidden px-4 pb-4">
+          <nav className="flex flex-col space-y-2">
+            <MenuLinks />
+          </nav>
+        </div>
+      )}
+    </header>
+  );
+};
 
 const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className, children, ...props }) => (
   <button {...props} className={`px-5 py-3 rounded-lg btn-theme font-semibold hover:opacity-95 transition ${className || ''}`}>{children}</button>

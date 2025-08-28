@@ -687,10 +687,46 @@ async function assertIsPlatformAdmin(ctx) {
     const email = userRec?.email?.toLowerCase();
     if (!email)
         throw new https_1.HttpsError('permission-denied', 'Sem e-mail');
-    const settingsSnap = await admin.firestore().doc('platform_settings').get();
-    const admins = (settingsSnap.exists ? settingsSnap.data().adminEmails : []) || [];
-    const fallback = ['admin@agendiia.com.br', 'contato@agendiia.com.br'];
-    const allowed = new Set([...admins.map(e => e.toLowerCase()), ...fallback]);
+    // Read settings from either 'platform/settings' (modern) or 'platform_settings' (legacy).
+    const extractEmails = (data) => {
+        if (!data)
+            return [];
+        if (typeof data === 'string')
+            return [data];
+        if (Array.isArray(data))
+            return data;
+        if (data.adminEmails) {
+            if (Array.isArray(data.adminEmails))
+                return data.adminEmails;
+            if (typeof data.adminEmails === 'string')
+                return [data.adminEmails];
+        }
+        if (data.emails) {
+            if (Array.isArray(data.emails))
+                return data.emails;
+            if (typeof data.emails === 'string')
+                return [data.emails];
+        }
+        if (data.email && typeof data.email === 'string')
+            return [data.email];
+        return [];
+    };
+    const settingsRef1 = admin.firestore().doc('platform/settings');
+    // legacy: try collection 'platform_settings' doc 'settings'
+    const settingsRef2 = admin.firestore().doc('platform_settings/settings');
+    const snap1 = await settingsRef1.get().catch(() => null);
+    let admins = [];
+    if (snap1 && snap1.exists) {
+        admins = extractEmails(snap1.data());
+    }
+    if (!admins || admins.length === 0) {
+        const snap2 = await settingsRef2.get().catch(() => null);
+        if (snap2 && snap2.exists) {
+            admins = extractEmails(snap2.data());
+        }
+    }
+    const fallback = ['admin@agendiia.com.br', 'contato@agendiia.com.br', 'contato@agendiia'];
+    const allowed = new Set([...(admins || []).map((e) => (typeof e === 'string' ? e.toLowerCase() : '')), ...fallback]);
     if (!allowed.has(email))
         throw new https_1.HttpsError('permission-denied', 'Acesso restrito');
     return { uid, email };
