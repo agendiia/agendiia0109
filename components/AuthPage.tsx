@@ -137,7 +137,7 @@ const AuthPage: React.FC = () => {
           <div className="h-px bg-gray-200 flex-1" />
         </div>
 
-        <Button onClick={onGoogle} disabled={submitting} className="bg-white text-gray-800 border border-gray-300 hover:bg-gray-50">
+  <Button onClick={onGoogle} disabled={submitting} className="bg-white text-gray-800 border border-gray-300 hover:bg-gray-50 !bg-white !text-gray-800">
           <span className="inline-flex items-center gap-2 justify-center">
             <img alt="Google" src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" />
             Entrar com Google

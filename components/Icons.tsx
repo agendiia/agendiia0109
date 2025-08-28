@@ -417,9 +417,7 @@ export const PixLogo: React.FC<IconProps> = (props) => (
 );
 
 export const MercadoPagoLogo: React.FC<IconProps> = (props) => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-        <path d="M12.518 2.052c-1.218.426-1.92 1.63-2.004 2.923l-.116 1.713c-.083 1.293.44 2.57 1.442 3.393l.26.213c.96.8,1.442 2.003 1.442 3.242v.512c0 1.24-.483 2.443-1.442 3.243l-.26.213c-1.003.822-1.525 2.1-1.442 3.393l.116 1.713c.084 1.293.786 2.497 2.004 2.923a3.52 3.52 0 0 0 3.376-1.026l.214-.24c.734-.82.998-1.92.77-2.964l-.19-1.02a3.55 3.55 0 0 1 1.09-3.23l.24-.249a3.53 3.53 0 0 0 0-4.99l-.24-.249a3.55 3.55 0 0 1-1.09-3.23l.19-1.02c.227-1.043-.037-2.143-.77-2.964l-.214-.24a3.52 3.52 0 0 0-3.376-1.026Z"></path>
-    </svg>
+    <img src="/mercadopago.png" alt="Mercado Pago" width={24} height={24} style={{ objectFit: 'contain' }} {...(props as any)} />
 );
 
 export const Eye: React.FC<IconProps> = (props) => (

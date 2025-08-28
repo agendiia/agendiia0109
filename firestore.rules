@@ -8,6 +8,10 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     // --- PUBLIC WRITE ACCESS (must come before general rules) ---
     // Allow public creation of testimonials and appointments
     match /users/{userId}/testimonials/{testimonialId} {
@@ -47,17 +51,22 @@ service cloud.firestore {
       allow read, write: if request.auth.token.admin == true;
     }
 
-    match /platform/{docId} {
-      allow get, create: if request.auth != null;
+    match /platform/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null; // Temporariamente permissivo para debug
     }
 
-    match /platform_settings/{docId} {
-      allow get, create: if request.auth != null;
+    match /platform_settings/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null; // Temporariamente permissivo para debug
     }
 
     // --- PUBLIC SLUGS ---
     match /public_slugs/{slug} {
-      allow read: if true;
+  // qualquer um pode ler slugs públicos
+  allow read: if true;
+  // apenas o dono (uid igual ao userId no documento) pode criar/atualizar seu slug
+  allow write: if request.auth != null && request.resource.data.userId == request.auth.uid;
     }
   }
 }

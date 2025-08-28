@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste de E-mail Profissional</title>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-functions-compat.js"></script>
+</head>
+<body>
+    <h1>Teste de Notificação do Profissional</h1>
+    <button onclick="createTestAppointment()">Criar Agendamento de Teste</button>
+    <div id="status"></div>
+
+    <script>
+        // Initialize Firebase (use your project config)
+        const firebaseConfig = {
+            projectId: "timevee-53a3c"
+        };
+        firebase.initializeApp(firebaseConfig);
+        
+        const db = firebase.firestore();
+        
+        async function createTestAppointment() {
+            const status = document.getElementById('status');
+            status.innerHTML = 'Criando agendamento de teste...';
+            
+            try {
+                const testUserId = 'test-professional-' + Date.now();
+                
+                // Create professional profile with email
+                await db.doc(`users/${testUserId}/profile/main`).set({
+                    name: 'Dr. Teste',
+                    email: 'profissional@teste.com'
+                });
+                
+                // Create appointment to trigger onAppointmentCreated
+                const appointmentData = {
+                    clientName: 'Cliente Teste',
+                    clientEmail: 'cliente@teste.com',
+                    service: 'Consulta Teste',
+                    dateTime: firebase.firestore.Timestamp.now(),
+                    duration: 60,
+                    status: 'Agendado',
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                
+                const docRef = await db.collection(`users/${testUserId}/appointments`).add(appointmentData);
+                
+                status.innerHTML = `
+                    <p>✅ Agendamento de teste criado!</p>
+                    <p>User ID: ${testUserId}</p>
+                    <p>Appointment ID: ${docRef.id}</p>
+                    <p>Verifique os logs do Firebase Console para ver se o profissional recebeu o e-mail.</p>
+                `;
+                
+            } catch (error) {
+                status.innerHTML = `❌ Erro: ${error.message}`;
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>

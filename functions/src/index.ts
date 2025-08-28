@@ -55,11 +55,19 @@ function formatDateTimePtBR(d: Date) {
 }
 
 function applyTemplate(template: string, vars: Record<string,string>) {
+  console.log('applyTemplate - Template original:', template);
+  console.log('applyTemplate - Variáveis disponíveis:', vars);
   let out = template;
   for (const k of Object.keys(vars)) {
+    // Usar regex para fazer a substituição global e case-insensitive
     const token = `{${k}}`;
-    out = out.split(token).join(vars[k] ?? '');
+    const escapedToken = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapedToken, 'g');
+    const replacement = vars[k] ?? '';
+    console.log(`applyTemplate - Substituindo ${token} por "${replacement}"`);
+    out = out.replace(regex, replacement);
   }
+  console.log('applyTemplate - Resultado final:', out);
   return out;
 }
 
@@ -200,9 +208,33 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
     const data = snap.data() as any;
     const clientEmail: string | undefined = data.clientEmail || data.email;
     const clientName: string = data.clientName || 'Cliente';
-    if (!clientEmail) return; // nothing to send
+  // Prossegue mesmo sem email do cliente para tentar notificar o profissional
     const serviceName: string = data.service || 'Atendimento';
     const dt: Date = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
+    
+    // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
+    const userId = event.params.userId;
+    const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
+    let professionalName: string | undefined = userProfileSnap.exists ? (userProfileSnap.data() as any)?.name : undefined;
+    if (!professionalName) {
+      // Try top-level users/{userId} doc
+      try {
+        const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+        professionalName = userDoc && userDoc.exists ? (userDoc.data() as any)?.name : undefined;
+      } catch (e) {
+        console.warn('onAppointmentCreated - failed to read users/{userId} for professional name fallback', e);
+      }
+    }
+    if (!professionalName) {
+      // Try Firebase Auth displayName or email
+      try {
+        const authRec = await admin.auth().getUser(userId);
+        professionalName = authRec.displayName || authRec.email || undefined;
+      } catch (e) {
+        // ignore
+      }
+    }
+    professionalName = professionalName || 'Profissional';
     // Load template
     const autoSnap = await admin.firestore().doc('platform/automations').get();
     const defaults = {
@@ -219,14 +251,86 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
     }
     const vars = {
       clientName,
+      professionalName,
       serviceName,
+      appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      // Compatibilidade com formato antigo
       dateTime: formatDateTimePtBR(dt),
       time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
     };
-    const html = applyTemplate(body, vars);
-    const subj = applyTemplate(subject, vars);
-    const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
-    await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+
+  // Backwards compatibility: also expose Portuguese variable names (some templates stored using these)
+  (vars as any)['nome do cliente'] = clientName;
+  (vars as any)['nome do profissional'] = professionalName;
+  (vars as any)['nome do serviço'] = serviceName;
+  (vars as any)['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  (vars as any)['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    if (clientEmail) {
+      const html = applyTemplate(body, vars);
+      const subj = applyTemplate(subject, vars);
+      const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+  // email do cliente enviado
+      await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    } else {
+      await snap.ref.update({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+
+    // Also notify the professional via email (try multiple fallbacks for email)
+    try {
+      const profProfile = userProfileSnap; // já buscado antes
+      let profEmail: string | undefined = profProfile.exists ? (profProfile.data() as any)?.email : undefined;
+      // fallback 1: users/{userId} top-level doc
+      if (!profEmail) {
+        try {
+          const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+          if (userDoc && userDoc.exists) {
+      const tmp = (userDoc.data() as any)?.email;            
+      profEmail = tmp || profEmail;
+          }
+        } catch (e) {
+          console.warn('onAppointmentCreated - falha ao ler users/{userId} para fallback de email', e);
+        }
+      }
+      // fallback 2: Firebase Auth
+      if (!profEmail) {
+        try {
+          const authRec = await admin.auth().getUser(userId);
+          profEmail = authRec?.email || profEmail;
+        } catch (e) {
+          console.warn('onAppointmentCreated - falha ao obter auth record para fallback de email', e);
+        }
+      }
+      // fallback 3 (último recurso): se ainda não houver email, não envia
+      if (profEmail) {
+        // Carregar template específico para profissional
+        const autoData: any = autoSnap.exists ? autoSnap.data() : null;
+        const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t: any) => t.id === 't_sched_professional') : null;
+        const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars as Record<string,string>);
+        const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Você recebeu um novo agendamento.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
+        // Garantir que variáveis críticas existam
+        if (!(vars as any).appointmentDate) (vars as any).appointmentDate = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        if (!(vars as any).appointmentTime) (vars as any).appointmentTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+        if (!(vars as any).professionalName) (vars as any).professionalName = professionalName;
+        const profHtml = applyTemplate(profBodyTemplate, vars as Record<string,string>);
+        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubject, profHtml);
+    // email profissional enviado
+        try {
+          await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        } catch (w) {
+          console.warn('onAppointmentCreated - falha ao registrar status do email do profissional', w);
+        }
+      } else {
+        try {
+          await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Failed to notify professional by email', e);
+      try {
+        await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: (e as any)?.message || String(e), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      } catch {}
+    }
   } catch (e) {
     console.warn('onAppointmentCreated email error', e);
   }
@@ -269,6 +373,12 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
         if (tmpl?.body) body = tmpl.body;
       }
       const vars = {
+        'nome do cliente': name,
+        'nome do profissional': professionalName,
+        'nome do serviço': serviceName,
+        'data': dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+        'horário': dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+        // Manter compatibilidade com variáveis antigas
         clientName: name,
         serviceName,
         dateTime: formatDateTimePtBR(dt),

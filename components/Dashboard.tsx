@@ -116,26 +116,24 @@ const Dashboard: React.FC = () => {
         const appts = apptSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
         setRecentAppointments(appts.map(a => ({ clientName: (a as any).clientName || (a as any).client || '', service: (a as any).service || '', date: (a as any).dateTime?.toDate ? (a as any).dateTime.toDate().toISOString().split('T')[0] : ((a as any).dateTime || ''), status: (a as any).status || '' })));
 
-        // Services performance (top services by revenue)
+        // Monthly revenue and new clients: fetch all appointments first (needed for multiple metrics)
+        const apptAllSnap = await getDocs(query(collection(db, 'users', user.uid, 'appointments'), orderBy('dateTime', 'desc')));
+        const apptAll = apptAllSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+
+        // Services performance (top services by revenue) AFTER apptAll is defined
         const svcSnap = await getDocs(collection(db, 'users', user.uid, 'services'));
         const services = svcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-        // calculate revenue and appointment counts per service using appointments we already fetched (apptAll)
         const perf = services.map(s => {
           const svcId = s.id;
           const svcName = (s as any).name || 'N/A';
           const matchingAppts = apptAll.filter(a => {
             const ad = a as any;
-            // match by explicit serviceId field or by service name (some docs use different shapes)
             return (ad.serviceId && ad.serviceId === svcId) || (ad.service && ad.service === svcName);
           });
-          const revenue = matchingAppts.reduce((sum, a) => sum + Number((a as any).price || 0), 0);
+            const revenue = matchingAppts.reduce((sum, a) => sum + Number((a as any).price || 0), 0);
           return { serviceId: svcId, serviceName: svcName, revenue, appointments: matchingAppts.length };
         });
         setServicePerformanceData(perf);
-
-        // Monthly revenue and new clients: do a best-effort from appointments and clients
-        const apptAllSnap = await getDocs(query(collection(db, 'users', user.uid, 'appointments'), orderBy('dateTime', 'desc')));
-        const apptAll = apptAllSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
 
         // Build monthly revenue for current year
         const now = new Date();

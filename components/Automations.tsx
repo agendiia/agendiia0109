@@ -4,6 +4,7 @@ import { BrevoSettings } from '../types';
 import { Bell, Edit } from './Icons';
 import { db } from '../services/firebase';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Template {
     id: string;
@@ -13,9 +14,68 @@ interface Template {
 }
 
 const initialTemplates: Template[] = [
-    { id: 't_sched', event: 'Agendamento Realizado', subject: 'Seu agendamento foi confirmado!', body: 'Olá {clientName}, seu agendamento para {serviceName} no dia {dateTime} foi realizado com sucesso!' },
-    { id: 't_remind', event: 'Lembrete de Agendamento (24h)', subject: 'Lembrete do seu agendamento', body: 'Olá, {clientName}! Passando para lembrar do seu horário de {serviceName} amanhã às {time}. Por favor, responda SIM para confirmar.' },
-    { id: 't_cancel', event: 'Agendamento Cancelado', subject: 'Agendamento cancelado', body: 'Olá {clientName}, seu agendamento para {serviceName} no dia {dateTime} foi cancelado.' },
+    { 
+        id: 't_sched', 
+        event: 'Agendamento Realizado', 
+        subject: 'Seu agendamento foi confirmado!', 
+        body: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; line-height: 1.6;">
+    <p style="font-size: 16px; margin-bottom: 20px;">Olá {clientName}, 👋</p>
+    
+    <p style="font-size: 16px; color: #16a34a; font-weight: bold; margin-bottom: 20px;">✅ Seu agendamento foi confirmado com sucesso!</p>
+    
+    <p style="font-size: 16px; font-weight: bold; margin-bottom: 15px;">📅 Detalhes da consulta:</p>
+    
+    <p style="margin-bottom: 8px;"><strong>Profissional:</strong> {professionalName}</p>
+    <p style="margin-bottom: 8px;"><strong>Serviço:</strong> {serviceName}</p>
+    <p style="margin-bottom: 8px;"><strong>Data:</strong> {appointmentDate}</p>
+    <p style="margin-bottom: 20px;"><strong>Horário:</strong> {appointmentTime}</p>
+    
+    <p style="margin-bottom: 30px;">Se precisar reagendar ou cancelar, é só entrar em contato conosco.</p>
+    
+    <p style="margin-bottom: 0;">Atenciosamente,<br/>{professionalName}</p>
+</div>` 
+    },
+    { 
+        id: 't_remind', 
+        event: 'Lembrete de Agendamento (24h)', 
+        subject: 'Lembrete do seu agendamento', 
+        body: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: #2563eb;">Olá {clientName}! 👋</h2>
+    
+    <p style="font-size: 16px; color: #f59e0b; font-weight: bold;">⏰ Lembrete do seu agendamento</p>
+    
+    <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+        <p>Passando para lembrar do seu horário de <strong>{serviceName}</strong> amanhã às <strong>{appointmentTime}</strong>.</p>
+        <p style="margin-bottom: 0;"><strong>Por favor, responda SIM para confirmar.</strong></p>
+    </div>
+    
+    <p style="margin-top: 30px;">
+        Atenciosamente,<br/>
+        <strong>{professionalName}</strong>
+    </p>
+</div>` 
+    },
+    { 
+        id: 't_cancel', 
+        event: 'Agendamento Cancelado', 
+        subject: 'Agendamento cancelado', 
+        body: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: #2563eb;">Olá {clientName},</h2>
+    
+    <p style="font-size: 16px; color: #dc2626; font-weight: bold;">❌ Agendamento cancelado</p>
+    
+    <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc2626;">
+        <p>Seu agendamento para <strong>{serviceName}</strong> no dia <strong>{appointmentDate}</strong> às <strong>{appointmentTime}</strong> foi cancelado.</p>
+    </div>
+    
+    <p>Se desejar reagendar, é só entrar em contato conosco.</p>
+    
+    <p style="margin-top: 30px;">
+        Atenciosamente,<br/>
+        <strong>{professionalName}</strong>
+    </p>
+</div>` 
+    },
 ];
 
 interface FeatureAccess {
@@ -32,6 +92,7 @@ const initialFeatureAccess: FeatureAccess = {
 }
 
 const Automations: React.FC = () => {
+    const { user } = useAuth();
     const [settings, setSettings] = useState<BrevoSettings>({ apiKey: '', isConnected: false, senderEmail: '', senderName: '' });
     const [saving, setSaving] = useState(false);
     const [statusMsg, setStatusMsg] = useState<string>('');
@@ -54,7 +115,14 @@ const Automations: React.FC = () => {
                 const autoSnap = await getDoc(autoRef);
                 if (autoSnap.exists()) {
                     const data = autoSnap.data() as any;
-                    if (Array.isArray(data.templates)) setTemplates(data.templates as Template[]);
+                    if (Array.isArray(data.templates)) {
+                        const savedTemplates = data.templates as Template[];
+                        const savedTemplatesMap = new Map(savedTemplates.map(t => [t.id, t]));
+                        const mergedTemplates = initialTemplates.map(initialT =>
+                            savedTemplatesMap.get(initialT.id) || initialT
+                        );
+                        setTemplates(mergedTemplates);
+                    }
                     if (data.featureAccess) setFeatureAccess(data.featureAccess as FeatureAccess);
                 }
             } catch (e) {
@@ -99,6 +167,44 @@ const Automations: React.FC = () => {
                 [plan]: !prev[feature][plan]
             }
         }));
+    };
+
+    const handleResetTemplates = async () => {
+        if (confirm('Tem certeza que deseja resetar todos os templates para os valores padrão? Esta ação não pode ser desfeita.')) {
+            setTemplates([...initialTemplates]);
+            setStatusMsg('Templates resetados para os valores padrão. Clique em "Salvar Modelos" para aplicar.');
+            setTimeout(() => setStatusMsg(''), 5000);
+        }
+    };
+
+    const handleSaveTemplates = async () => {
+        try {
+            setSaving(true);
+            console.log('Salvando templates:', templates);
+            console.log('Usuário atual:', user); // Para debug
+            
+            const docRef = doc(db, 'platform', 'automations');
+            console.log('Referência do documento:', docRef);
+            
+            const dataToSave = {
+                templates,
+                updatedAt: serverTimestamp(),
+            };
+            console.log('Dados a salvar:', dataToSave);
+            
+            await setDoc(docRef, dataToSave, { merge: true });
+            
+            console.log('Templates salvos com sucesso');
+            setStatusMsg('Modelos de e-mail salvos com sucesso.');
+            setTimeout(() => setStatusMsg(''), 3000);
+        } catch (e) {
+            console.error('Erro detalhado ao salvar templates:', e);
+            console.error('Stack trace:', (e as Error).stack);
+            setStatusMsg(`Erro ao salvar os modelos de e-mail: ${e instanceof Error ? e.message : 'Erro desconhecido'}`);
+            setTimeout(() => setStatusMsg(''), 5000);
+        } finally {
+            setSaving(false);
+        }
     };
 
     const handleSaveAll = async () => {
@@ -173,12 +279,24 @@ const Automations: React.FC = () => {
                                 <input type="text" value={template.subject} onChange={(e) => handleTemplateChange(template.id, 'subject', e.target.value)} className="w-full p-2 rounded-md bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600" placeholder="Assunto do E-mail"/>
                                 <textarea value={template.body} onChange={(e) => handleTemplateChange(template.id, 'body', e.target.value)} rows={3} className="w-full p-2 rounded-md bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 resize-y" placeholder="Corpo do E-mail"/>
                             </div>
-                            <p className="text-xs text-gray-400 mt-2">Variáveis disponíveis: <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded">{'{clientName}'}</code> <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded">{'{serviceName}'}</code> <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded">{'{dateTime}'}</code></p>
+                            <p className="text-xs text-gray-400 mt-2">
+                                <strong>Variáveis disponíveis:</strong><br/>
+                                <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded mr-1">{'{nome do cliente}'}</code>
+                                <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded mr-1">{'{nome do profissional}'}</code>
+                                <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded mr-1">{'{nome do serviço}'}</code>
+                                <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded mr-1">{'{data}'}</code>
+                                <code className="bg-gray-200 dark:bg-gray-700 p-0.5 rounded">{'{horário}'}</code>
+                                <br/>
+                                <span className="text-blue-600 dark:text-blue-400 text-xs">💡 Dica: Você pode usar HTML para formatação (negrito, cores, etc.)</span>
+                            </p>
                         </div>
                     ))}
                 </div>
-                <div className="mt-3 flex justify-end">
-                    <button type="button" onClick={handleSaveAll} disabled={saving} className="bg-indigo-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-indigo-700 disabled:opacity-60">{saving ? 'Salvando…' : 'Salvar Modelos'}</button>
+                <div className="mt-3 flex justify-between items-center">
+                    <button type="button" onClick={handleResetTemplates} className="bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 text-sm">
+                        🔄 Resetar Templates
+                    </button>
+                    <button type="button" onClick={handleSaveTemplates} disabled={saving} className="bg-indigo-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-indigo-700 disabled:opacity-60">{saving ? 'Salvando…' : 'Salvar Modelos'}</button>
                 </div>
             </div>
             
