@@ -1592,8 +1592,8 @@ const GatewayIcon: React.FC<{ gatewayId: string }> = ({ gatewayId }) => {
         case 'pix':
             return <PixLogo className={`${iconClass} text-green-600 dark:text-green-300 w-6 h-6`} />;
         case 'mercadopago':
-            // Show a generic credit-card icon for the "Cartão de Crédito" option
-            return <CreditCard className={`${iconClass} text-gray-700 dark:text-gray-300`} />;
+            // Use the provided Mercado Pago logo image
+            return <img src="/mercadopago.png" alt="Mercado Pago" className={`${iconClass} object-contain`} />;
         default:
             return <DollarSign className={`${iconClass} text-gray-500`} />;
     }
