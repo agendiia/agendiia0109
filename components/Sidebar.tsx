@@ -184,6 +184,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView }) => {
   };
 
   const navItems: { id: View; label: string; icon: React.ReactNode; isLocked?: boolean }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-5 w-5" /> },
     { id: 'availability', label: 'Minha Agenda', icon: <Clock className="h-5 w-5" /> },
     { id: 'appointments', label: 'Agendamentos', icon: <Calendar className="h-5 w-5" /> },
     { id: 'clients', label: 'Clientes', icon: <Users className="h-5 w-5" /> },

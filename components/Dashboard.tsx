@@ -1,346 +1,465 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
-import { DollarSign, Calendar, AverageTicket, TrendingUp, UserPlus, NoShow, Send, Loader } from './Icons';
-import { generateChatResponse } from '../services/geminiService';
-import { Appointment, AppointmentStatus, Client, ClientCategory } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { DollarSign, Calendar, Clock, Users, CheckCircle, XCircle, AlertCircle, Activity, TrendingUp, ArrowUp, ArrowDown } from 'lucide-react';
 import { db } from '../services/firebase';
-import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import LockedWidget from './LockedWidget';
-import { LoadingSpinner, LoadingState } from './LoadingState';
-import { useAsyncOperation } from '../hooks/useAsyncOperation';
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, isToday, isFuture, isPast, addDays, subDays, isWithinInterval } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
-interface MetricCardProps {
-  title: string;
-  value: string;
-  change?: string;
-  icon: React.ReactNode;
-  color: string;
+interface DayMetrics {
+  totalRevenue: number;
+  confirmedAppointments: number;
+  completedAppointments: number;
+  cancelledAppointments: number;
+  pendingAppointments: number;
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({ title, value, change, icon, color }) => (
-  <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-md flex items-center space-x-4 transition-transform hover:scale-105">
-    <div className={`p-3 rounded-full ${color}`}>
-      {icon}
+interface WeekMetrics {
+  currentWeek: DayMetrics;
+  previousWeek: DayMetrics;
+}
+
+interface AppointmentItem {
+  id: string;
+  clientName: string;
+  serviceName: string;
+  dateTime: Date;
+  status: string;
+  price: number;
+}
+
+interface CurrentStatus {
+  status: 'livre' | 'ocupado' | 'pausa';
+  nextAppointment?: Date;
+  currentAppointment?: AppointmentItem;
+}
+
+const MetricCard: React.FC<{
+  title: string;
+  value: string;
+  change?: number;
+  icon: React.ReactNode;
+  color: string;
+  subtitle?: string;
+}> = ({ title, value, change, icon, color, subtitle }) => (
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+    <div className="flex items-center justify-between mb-2">
+      <div className={`p-3 rounded-full ${color}`}>
+        {icon}
+      </div>
+      {change !== undefined && (
+        <div className={`flex items-center text-sm ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+          {change >= 0 ? <ArrowUp className="h-4 w-4 mr-1" /> : <ArrowDown className="h-4 w-4 mr-1" />}
+          {Math.abs(change).toFixed(1)}%
+        </div>
+      )}
     </div>
-    <div>
-      <p className="text-sm text-gray-500 dark:text-gray-400 font-medium">{title}</p>
-      <p className="text-2xl font-bold text-gray-800 dark:text-white">{value}</p>
-      {change && <p className="text-xs text-green-500">{change}</p>}
-    </div>
+    <h3 className="text-sm font-medium text-gray-600 mb-1">{title}</h3>
+    <p className="text-2xl font-bold text-gray-900 mb-1">{value}</p>
+    {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
   </div>
 );
 
-// State-driven datasets (fetched from Firestore)
-interface ChatMessage {
-  sender: 'user' | 'ai';
-  text: string;
-}
-
-const monthLabels = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-
-const Dashboard: React.FC = () => {
-  const { hasAccess, user } = useAuth();
-  const [monthlyRevenueData, setMonthlyRevenueData] = useState<any[]>([]);
-  const [newClientsData, setNewClientsData] = useState<any[]>([]);
-  const [servicePerformanceData, setServicePerformanceData] = useState<any[]>([]);
-  const [servicePage, setServicePage] = useState<number>(1);
-  const [servicePageSize, setServicePageSize] = useState<number>(5);
-  const [recentAppointments, setRecentAppointments] = useState<any[]>([]);
-  const [revenueThisMonth, setRevenueThisMonth] = useState<number>(0);
-  const [consultasThisMonth, setConsultasThisMonth] = useState<number>(0);
-  const [ticketMedio, setTicketMedio] = useState<number>(0);
-  const [noShowRate, setNoShowRate] = useState<number>(0);
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
-      { sender: 'ai', text: 'Olá! Como posso ajudar a analisar seus dados de negócio hoje?' }
-  ]);
-  const [userInput, setUserInput] = useState('');
-  const [isChatLoading, setIsChatLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const hasAutoScrolledRef = useRef<boolean>(false);
-
-  const handleSendMessage = async () => {
-    if (!userInput.trim() || isChatLoading) return;
-
-    const userMessage = userInput.trim();
-    setUserInput('');
-    setChatHistory(prev => [...prev, { sender: 'user', text: userMessage }]);
-    setIsChatLoading(true);
-
-    // Create abort controller for this request
-    const currentAbortController = new AbortController();
-    abortControllerRef.current = currentAbortController;
-
-    try {
-      const context = {
-        recentAppointments,
-        servicePerformance: servicePerformanceData,
-        monthlyRevenue: monthlyRevenueData,
-        newClients: newClientsData,
-        currentDate: new Date().toISOString().split('T')[0]
-      };
-
-      const response = await generateChatResponse(userMessage, context);
-      
-      if (!currentAbortController.signal.aborted) {
-        setChatHistory(prev => [...prev, { sender: 'ai', text: response }]);
-      }
-    } catch (error: any) {
-      if (error.name !== 'AbortError' && !currentAbortController.signal.aborted) {
-        setChatHistory(prev => [...prev, { 
-          sender: 'ai', 
-          text: 'Desculpe, houve um erro ao processar sua mensagem. Tente novamente.' 
-        }]);
-      }
-    } finally {
-      if (!currentAbortController.signal.aborted) {
-        setIsChatLoading(false);
-      }
-      abortControllerRef.current = null;
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
+  const getStatusConfig = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'confirmed':
+      case 'confirmado':
+        return { color: 'bg-blue-100 text-blue-800', label: 'Confirmado' };
+      case 'finished':
+      case 'finalizado':
+        return { color: 'bg-green-100 text-green-800', label: 'Finalizado' };
+      case 'canceled':
+      case 'cancelado':
+        return { color: 'bg-red-100 text-red-800', label: 'Cancelado' };
+      case 'pending':
+      case 'pendente':
+        return { color: 'bg-yellow-100 text-yellow-800', label: 'Pendente' };
+      default:
+        return { color: 'bg-gray-100 text-gray-800', label: status };
     }
   };
 
+  const config = getStatusConfig(status);
+  return (
+    <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.color}`}>
+      {config.label}
+    </span>
+  );
+};
+
+const Dashboard: React.FC = () => {
+  const { user } = useAuth();
+  const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
+  const [services, setServices] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Carregamento de dados em tempo real
   useEffect(() => {
-    // Avoid auto-scrolling on initial mount (e.g., after login). Only scroll
-    // when new messages are appended after the first render or when the
-    // loading state changes subsequently. Also skip auto-scroll for the
-    // initial greeting message (chatHistory length === 1).
-    if (!chatEndRef.current) return;
-    if (!hasAutoScrolledRef.current) {
-      hasAutoScrolledRef.current = true;
+    if (!user?.uid) {
+      setIsLoading(false);
       return;
     }
-    if (chatHistory.length <= 1) return;
-    chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory.length, isChatLoading]);
 
-  useEffect(() => {
-    if (!user) return;
+    const unsubscribes: (() => void)[] = [];
 
-    // Real-time listeners
-    const apptQuery = query(collection(db, 'users', user.uid, 'appointments'), orderBy('dateTime', 'desc'));
-    const recentApptQuery = query(collection(db, 'users', user.uid, 'appointments'), orderBy('createdAt', 'desc'), limit(10));
-    const servicesQuery = collection(db, 'users', user.uid, 'services');
-    const clientsQuery = collection(db, 'users', user.uid, 'clients');
+    // Appointments
+    unsubscribes.push(
+      onSnapshot(collection(db, 'users', user.uid, 'appointments'), snapshot => {
+        const fetchedAppointments = snapshot.docs.map(doc => ({
+          id: doc.id,
+          clientName: doc.data().clientName || doc.data().client || '',
+          serviceName: doc.data().service || '',
+          dateTime: doc.data().dateTime?.toDate() || new Date(),
+          status: doc.data().status || 'pending',
+          price: Number(doc.data().price) || 0
+        }));
+        setAppointments(fetchedAppointments);
+      })
+    );
 
-    const unsubRecent = onSnapshot(recentApptQuery, (snap) => {
-      const appts = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-      setRecentAppointments(appts.map(a => ({ clientName: (a as any).clientName || (a as any).client || '', service: (a as any).service || '', date: (a as any).dateTime?.toDate ? (a as any).dateTime.toDate().toISOString().split('T')[0] : ((a as any).dateTime || ''), status: (a as any).status || '' })));
-    });
+    // Services
+    unsubscribes.push(
+      onSnapshot(collection(db, 'users', user.uid, 'services'), snapshot => {
+        setServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      })
+    );
 
-    const unsubAll = onSnapshot(apptQuery, (snap) => {
-      const apptAll = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+    // Clients
+    unsubscribes.push(
+      onSnapshot(collection(db, 'users', user.uid, 'clients'), snapshot => {
+        setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setIsLoading(false);
+      })
+    );
 
-      // Services performance
-      onSnapshot(servicesQuery, (svcSnap) => {
-        const services = svcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-        const perf = services.map(s => {
-          const svcId = s.id;
-          const svcName = (s as any).name || 'N/A';
-          const matchingAppts = apptAll.filter(a => {
-            const ad = a as any;
-            return ((ad.serviceId && ad.serviceId === svcId) || (ad.service && ad.service === svcName)) && (ad.status === AppointmentStatus.Confirmed || ad.status === AppointmentStatus.Finished);
-          });
-          const revenue = matchingAppts.reduce((sum, a) => sum + Number((a as any).price || 0), 0);
-          return { serviceId: svcId, serviceName: svcName, revenue, appointments: matchingAppts.length };
-        });
-        setServicePerformanceData(perf);
-      });
+    return () => unsubscribes.forEach(unsubscribe => unsubscribe());
+  }, [user?.uid]);
 
-      // Monthly revenue
-      const now = new Date();
-      const months = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], Faturamento: 0, Despesas: 0 }));
-      apptAll.forEach(a => {
-        const ad = a as any;
-        const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
-        if (!dt || ad.status === AppointmentStatus.Canceled) return;
-        if (dt.getFullYear() !== now.getFullYear()) return;
-        const m = dt.getMonth();
-        const price = Number(ad.price || 0);
-        if (ad.status === AppointmentStatus.Confirmed || ad.status === AppointmentStatus.Finished) {
-          months[m].Faturamento += price;
-        }
-      });
-      setMonthlyRevenueData(months.slice(0, 12));
+  // Métricas do dia
+  const dayMetrics = useMemo<DayMetrics>(() => {
+    const today = new Date();
+    const todayAppointments = appointments.filter(app => isToday(app.dateTime));
 
-      // Current month metrics
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
-      const apptsThisMonth = apptAll.filter(a => {
-        const ad = a as any;
-        const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
-        return dt && dt.getFullYear() === currentYear && dt.getMonth() === currentMonth;
-      });
-
-      const revenue = apptsThisMonth
-        .filter(a => (a as any).status === AppointmentStatus.Confirmed || (a as any).status === AppointmentStatus.Finished)
-        .reduce((s, a) => s + Number((a as any).price || 0), 0);
-      const consultasCount = apptsThisMonth.filter(a => (a as any).status === AppointmentStatus.Confirmed || (a as any).status === AppointmentStatus.Finished).length;
-      const noShowCount = apptsThisMonth.filter(a => (a as any).status === AppointmentStatus.Problem).length;
-      const totalConsideredForNoShow = apptsThisMonth.filter(a => 
-          (a as any).status === AppointmentStatus.Confirmed || 
-          (a as any).status === AppointmentStatus.Finished ||
-          (a as any).status === AppointmentStatus.Problem
-      ).length;
-
-      setRevenueThisMonth(revenue);
-      setConsultasThisMonth(consultasCount);
-      setTicketMedio(consultasCount > 0 ? revenue / consultasCount : 0);
-      setNoShowRate(totalConsideredForNoShow > 0 ? Math.round((noShowCount / totalConsideredForNoShow) * 100) : 0);
-    });
-
-    const unsubClients = onSnapshot(clientsQuery, (snap) => {
-      const clients = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-      const now = new Date();
-      const newClientsByMonth = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], 'Novos Clientes': 0 }));
-      clients.forEach(c => {
-        const cd = c as any;
-        const created = cd.createdAt?.toDate ? cd.createdAt.toDate() : (cd.createdAt ? new Date(cd.createdAt) : null);
-        if (!created) return;
-        if (created.getFullYear() !== now.getFullYear()) return;
-        newClientsByMonth[created.getMonth()]['Novos Clientes'] += 1;
-      });
-      setNewClientsData(newClientsByMonth.slice(0, 12));
-    });
-
-    // cleanup
-    return () => {
-      unsubRecent();
-      unsubAll();
-      unsubClients();
+    return {
+      totalRevenue: todayAppointments
+        .filter(app => app.status === 'finished' || app.status === 'finalizado')
+        .reduce((sum, app) => sum + app.price, 0),
+      confirmedAppointments: todayAppointments.filter(app => 
+        app.status === 'confirmed' || app.status === 'confirmado'
+      ).length,
+      completedAppointments: todayAppointments.filter(app => 
+        app.status === 'finished' || app.status === 'finalizado'
+      ).length,
+      cancelledAppointments: todayAppointments.filter(app => 
+        app.status === 'canceled' || app.status === 'cancelado'
+      ).length,
+      pendingAppointments: todayAppointments.filter(app => 
+        app.status === 'pending' || app.status === 'pendente'
+      ).length
     };
-  }, [user]);
+  }, [appointments]);
 
-  useEffect(() => {
-    return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+  // Métricas da semana com comparativo
+  const weekMetrics = useMemo<WeekMetrics>(() => {
+    const now = new Date();
+    const currentWeekStart = startOfWeek(now, { locale: ptBR });
+    const currentWeekEnd = endOfWeek(now, { locale: ptBR });
+    const previousWeekStart = startOfWeek(subDays(now, 7), { locale: ptBR });
+    const previousWeekEnd = endOfWeek(subDays(now, 7), { locale: ptBR });
+
+    const currentWeekAppointments = appointments.filter(app =>
+      isWithinInterval(app.dateTime, { start: currentWeekStart, end: currentWeekEnd })
+    );
+
+    const previousWeekAppointments = appointments.filter(app =>
+      isWithinInterval(app.dateTime, { start: previousWeekStart, end: previousWeekEnd })
+    );
+
+    const calculateMetrics = (apps: AppointmentItem[]): DayMetrics => ({
+      totalRevenue: apps
+        .filter(app => app.status === 'finished' || app.status === 'finalizado')
+        .reduce((sum, app) => sum + app.price, 0),
+      confirmedAppointments: apps.filter(app => 
+        app.status === 'confirmed' || app.status === 'confirmado'
+      ).length,
+      completedAppointments: apps.filter(app => 
+        app.status === 'finished' || app.status === 'finalizado'
+      ).length,
+      cancelledAppointments: apps.filter(app => 
+        app.status === 'canceled' || app.status === 'cancelado'
+      ).length,
+      pendingAppointments: apps.filter(app => 
+        app.status === 'pending' || app.status === 'pendente'
+      ).length
+    });
+
+    return {
+      currentWeek: calculateMetrics(currentWeekAppointments),
+      previousWeek: calculateMetrics(previousWeekAppointments)
     };
-  }, []);
+  }, [appointments]);
+
+  // Próximos agendamentos
+  const upcomingAppointments = useMemo(() => {
+    const now = new Date();
+    return appointments
+      .filter(app => isFuture(app.dateTime) && (app.status === 'confirmed' || app.status === 'confirmado'))
+      .sort((a, b) => a.dateTime.getTime() - b.dateTime.getTime())
+      .slice(0, 10);
+  }, [appointments]);
+
+  // Status em tempo real
+  const currentStatus = useMemo<CurrentStatus>(() => {
+    const now = new Date();
+    const currentAppointment = appointments.find(app => {
+      const start = app.dateTime;
+      const end = addDays(start, 0); // Assumindo 1h de duração
+      end.setHours(start.getHours() + 1);
+      return isWithinInterval(now, { start, end }) && 
+             (app.status === 'confirmed' || app.status === 'confirmado');
+    });
+
+    if (currentAppointment) {
+      return {
+        status: 'ocupado',
+        currentAppointment
+      };
+    }
+
+    const nextAppointment = upcomingAppointments[0];
+    return {
+      status: 'livre',
+      nextAppointment: nextAppointment?.dateTime
+    };
+  }, [appointments, upcomingAppointments]);
+
+  // Cálculo de variações percentuais
+  const getPercentageChange = (current: number, previous: number): number => {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    return ((current - previous) / previous) * 100;
+  };
+
+  const revenueChange = getPercentageChange(
+    weekMetrics.currentWeek.totalRevenue,
+    weekMetrics.previousWeek.totalRevenue
+  );
+
+  const appointmentsChange = getPercentageChange(
+    weekMetrics.currentWeek.completedAppointments,
+    weekMetrics.previousWeek.completedAppointments
+  );
+
+  // Dados para gráfico da semana
+  const weeklyData = useMemo(() => {
+    const data = [];
+    const today = new Date();
+    
+    for (let i = 6; i >= 0; i--) {
+      const date = subDays(today, i);
+      const dayAppointments = appointments.filter(app => 
+        format(app.dateTime, 'yyyy-MM-dd') === format(date, 'yyyy-MM-dd')
+      );
+      
+      data.push({
+        day: format(date, 'EEE', { locale: ptBR }),
+        agendamentos: dayAppointments.filter(app => 
+          app.status === 'finished' || app.status === 'finalizado'
+        ).length,
+        receita: dayAppointments
+          .filter(app => app.status === 'finished' || app.status === 'finalizado')
+          .reduce((sum, app) => sum + app.price, 0)
+      });
+    }
+    
+    return data;
+  }, [appointments]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-violet-50 to-blue-50 p-4">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex items-center justify-center py-20">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-violet-600 mx-auto mb-4"></div>
+              <p className="text-gray-600">Carregando dashboard...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 p-6">
-      {/* Metrics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <MetricCard
-          title="Faturamento Mensal"
-            value={`R$ ${revenueThisMonth.toFixed(2)}`}
-            change=""
-          icon={<DollarSign className="h-6 w-6 text-white" />}
-          color="bg-green-500"
-        />
-        <MetricCard
-          title="Consultas Este Mês"
-            value={`${consultasThisMonth}`}
-            change=""
-          icon={<Calendar className="h-6 w-6 text-white" />}
-          color="bg-blue-500"
-        />
-        <MetricCard
-          title="Ticket Médio"
-            value={`R$ ${ticketMedio.toFixed(2)}`}
-            change=""
-          icon={<AverageTicket className="h-6 w-6 text-white" />}
-          color="bg-purple-500"
-        />
-        <MetricCard
-          title="Taxa de No-Show"
-            value={`${noShowRate}%`}
-            change=""
-          icon={<NoShow className="h-6 w-6 text-white" />}
-          color="bg-red-500"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Revenue Chart */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center">
-            <TrendingUp className="h-5 w-5 mr-2" /> Faturamento vs Despesas
-          </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={monthlyRevenueData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="Faturamento" fill="#10b981" />
-              <Bar dataKey="Despesas" fill="#f59e0b" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* New Clients Chart */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4 flex items-center">
-            <UserPlus className="h-5 w-5 mr-2" /> Novos Clientes
-          </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={newClientsData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="Novos Clientes" stroke="#6366f1" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-6">
-        {/* AI Chat */}
-        {hasAccess('dashboard.ai_chat') ? (
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-            <h2 className="text-xl font-semibold mb-4 text-gray-800 dark:text-white">Insights com IA</h2>
-            <div className="border border-gray-200 dark:border-gray-700 rounded-lg h-96 flex flex-col">
-              <div className="flex-grow overflow-y-auto p-4 space-y-4">
-                {chatHistory.map((msg, index) => (
-                  <div key={index} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-xs lg:max-w-md p-3 rounded-lg ${msg.sender === 'user' ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'}`}>
-                      <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-                    </div>
-                  </div>
-                ))}
-                {isChatLoading && (
-                  <div className="flex justify-start">
-                    <div className="max-w-xs lg:max-w-md p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 flex items-center">
-                      <Loader className="h-5 w-5 animate-spin mr-2" />
-                      <span className="text-sm">Analisando...</span>
-                    </div>
-                  </div>
-                )}
-                <div ref={chatEndRef} />
+    <div className="min-h-screen bg-gradient-to-br from-violet-50 to-blue-50 p-4">
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header com Status em Tempo Real */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+              <p className="text-gray-600">{format(new Date(), "EEEE, d 'de' MMMM", { locale: ptBR })}</p>
+            </div>
+            <div className="text-right">
+              <div className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${
+                currentStatus.status === 'ocupado' 
+                  ? 'bg-red-100 text-red-800' 
+                  : 'bg-green-100 text-green-800'
+              }`}>
+                <Activity className="h-4 w-4 mr-2" />
+                {currentStatus.status === 'ocupado' ? 'Ocupado' : 'Livre'}
               </div>
-              <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    placeholder="Pergunte algo sobre seus dados..."
-                    value={userInput}
-                    onChange={(e) => setUserInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                    disabled={isChatLoading}
-                    className="w-full p-2 rounded-md bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:opacity-50"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={isChatLoading || !userInput.trim()}
-                    className="bg-indigo-600 text-white p-2 rounded-full shadow-md hover:bg-indigo-700 transition-colors disabled:bg-indigo-400 disabled:cursor-not-allowed"
-                  >
-                    <Send className="h-5 w-5" />
-                  </button>
+              {currentStatus.nextAppointment && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Próximo: {format(currentStatus.nextAppointment, 'HH:mm')}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Métricas do Dia */}
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Métricas de Hoje</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <MetricCard
+              title="Receita do Dia"
+              value={`R$ ${dayMetrics.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+              icon={<DollarSign className="h-6 w-6 text-white" />}
+              color="bg-green-500"
+              subtitle="Agendamentos finalizados"
+            />
+            <MetricCard
+              title="Agendamentos Confirmados"
+              value={dayMetrics.confirmedAppointments.toString()}
+              icon={<CheckCircle className="h-6 w-6 text-white" />}
+              color="bg-blue-500"
+              subtitle="Para hoje"
+            />
+            <MetricCard
+              title="Agendamentos Finalizados"
+              value={dayMetrics.completedAppointments.toString()}
+              icon={<Calendar className="h-6 w-6 text-white" />}
+              color="bg-purple-500"
+              subtitle="Concluídos hoje"
+            />
+            <MetricCard
+              title="Cancelamentos"
+              value={dayMetrics.cancelledAppointments.toString()}
+              icon={<XCircle className="h-6 w-6 text-white" />}
+              color="bg-red-500"
+              subtitle="Cancelados hoje"
+            />
+          </div>
+        </div>
+
+        {/* Métricas da Semana com Comparativo */}
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Comparativo Semanal</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <MetricCard
+              title="Receita da Semana"
+              value={`R$ ${weekMetrics.currentWeek.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+              change={revenueChange}
+              icon={<TrendingUp className="h-6 w-6 text-white" />}
+              color="bg-emerald-500"
+              subtitle="vs semana anterior"
+            />
+            <MetricCard
+              title="Agendamentos da Semana"
+              value={weekMetrics.currentWeek.completedAppointments.toString()}
+              change={appointmentsChange}
+              icon={<Users className="h-6 w-6 text-white" />}
+              color="bg-indigo-500"
+              subtitle="vs semana anterior"
+            />
+          </div>
+        </div>
+
+        {/* Gráfico da Semana e Próximos Agendamentos */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Gráfico Semanal */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Performance dos Últimos 7 Dias</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={weeklyData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="day" />
+                <YAxis />
+                <Tooltip 
+                  formatter={(value, name) => [
+                    name === 'receita' ? `R$ ${Number(value).toLocaleString('pt-BR')}` : value,
+                    name === 'receita' ? 'Receita' : 'Agendamentos'
+                  ]}
+                />
+                <Bar dataKey="agendamentos" fill="#8B5CF6" />
+                <Bar dataKey="receita" fill="#10B981" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Próximos Agendamentos */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Próximos Agendamentos</h3>
+            <div className="space-y-3 max-h-[300px] overflow-y-auto">
+              {upcomingAppointments.length > 0 ? (
+                upcomingAppointments.map((appointment) => (
+                  <div key={appointment.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center space-x-3">
+                      <div className="flex-shrink-0">
+                        <Clock className="h-5 w-5 text-gray-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{appointment.clientName}</p>
+                        <p className="text-xs text-gray-600">{appointment.serviceName}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-medium text-gray-900">
+                        {format(appointment.dateTime, 'HH:mm')}
+                      </p>
+                      <p className="text-xs text-gray-600">
+                        {format(appointment.dateTime, 'dd/MM')}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <Calendar className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                  <p>Nenhum agendamento próximo</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Status Atual Detalhado */}
+        {currentStatus.currentAppointment && (
+          <div className="bg-gradient-to-r from-blue-500 to-purple-600 text-white p-6 rounded-xl shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Agendamento Atual</h3>
+                <p className="text-blue-100">Cliente: {currentStatus.currentAppointment.clientName}</p>
+                <p className="text-blue-100">Serviço: {currentStatus.currentAppointment.serviceName}</p>
+                <p className="text-blue-100">
+                  Horário: {format(currentStatus.currentAppointment.dateTime, 'HH:mm')}
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="bg-white/20 px-4 py-2 rounded-lg">
+                  <p className="text-sm">Valor</p>
+                  <p className="text-xl font-bold">
+                    R$ {currentStatus.currentAppointment.price.toLocaleString('pt-BR')}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
-        ) : (
-          <LockedWidget featureName="Insights com IA" />
         )}
       </div>
-      
-  {/* Services - removed per request */}
     </div>
   );
 };
