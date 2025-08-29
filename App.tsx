@@ -25,7 +25,6 @@ import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-ro
 type View = 'dashboard' | 'appointments' | 'clients' | 'marketing' | 'services' | 'finance' | 'availability' | 'profile' | 'reports' | 'help-center' | 'settings' | 'subscription';
 
 const App: React.FC = () => {
-  const [isSidebarOpen, setSidebarOpen] = useState(false);
   const { plan, hasAccess, user, loading, logout } = useAuth();
 
   // We'll render inside a Router below; use a small wrapper to access location/navigate
@@ -57,12 +56,10 @@ const App: React.FC = () => {
       // access control
       if (view === 'reports' && !hasAccess('reports.view')) {
         navigate('/subscription');
-        setSidebarOpen(false);
         return;
       }
       if (view === 'marketing' && !hasAccess('marketing.view')) {
         navigate('/subscription');
-        setSidebarOpen(false);
         return;
       }
       const map: Record<View, string> = {
@@ -80,7 +77,6 @@ const App: React.FC = () => {
         subscription: '/subscription'
       };
       navigate(map[view]);
-      setSidebarOpen(false);
     };
 
     // global navigation hook
@@ -103,32 +99,13 @@ const App: React.FC = () => {
           <Sidebar currentView={currentView} setCurrentView={handleSetView} />
         </div>
 
-        {/* Mobile Sidebar overlay */}
-        <div
-          className={`fixed inset-0 z-30 bg-black bg-opacity-50 transition-opacity lg:hidden ${
-            isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
-          }`}
-          onClick={() => setSidebarOpen(false)}
-        ></div>
-        <div
-          className={`fixed inset-y-0 left-0 z-40 w-64 transform transition-transform duration-300 ease-in-out lg:hidden ${
-            isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          }`}
-        >
-          <Sidebar 
-            currentView={currentView}
-            setCurrentView={(view) => { handleSetView(view); setSidebarOpen(false); }}
-          />
+        {/* Mobile Sidebar (dropdown only) */}
+        <div className="lg:hidden">
+          <Sidebar currentView={currentView} setCurrentView={handleSetView} />
         </div>
 
         <main className="flex-1 flex flex-col overflow-hidden">
           <header className="flex items-center justify-between p-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 lg:justify-end">
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="text-gray-500 dark:text-gray-400 focus:outline-none lg:hidden"
-            >
-              <Menu className="h-6 w-6" />
-            </button>
             <div className="flex items-center space-x-4">
               <span className="px-3 py-1 text-sm font-bold rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300">
                 Plano: {plan}

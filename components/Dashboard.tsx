@@ -4,7 +4,7 @@ import { DollarSign, Calendar, AverageTicket, TrendingUp, UserPlus, NoShow, Send
 import { generateChatResponse } from '../services/geminiService';
 import { Appointment, AppointmentStatus, Client, ClientCategory } from '../types';
 import { db } from '../services/firebase';
-import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import LockedWidget from './LockedWidget';
 import { LoadingSpinner, LoadingState } from './LoadingState';
@@ -58,6 +58,7 @@ const Dashboard: React.FC = () => {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const hasAutoScrolledRef = useRef<boolean>(false);
 
   const handleSendMessage = async () => {
     if (!userInput.trim() || isChatLoading) return;
@@ -101,94 +102,114 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    // Avoid auto-scrolling on initial mount (e.g., after login). Only scroll
+    // when new messages are appended after the first render or when the
+    // loading state changes subsequently. Also skip auto-scroll for the
+    // initial greeting message (chatHistory length === 1).
+    if (!chatEndRef.current) return;
+    if (!hasAutoScrolledRef.current) {
+      hasAutoScrolledRef.current = true;
+      return;
     }
-  }, [chatHistory, isChatLoading]);
+    if (chatHistory.length <= 1) return;
+    chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory.length, isChatLoading]);
 
   useEffect(() => {
-    // Fetch minimal dashboard data from Firestore for the logged user
-    const fetchDashboard = async () => {
-      if (!user) return;
-      try {
-        // Recent appointments (last 10)
-        const apptSnap = await getDocs(query(collection(db, 'users', user.uid, 'appointments'), orderBy('createdAt', 'desc'), limit(10)));
-        const appts = apptSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-        setRecentAppointments(appts.map(a => ({ clientName: (a as any).clientName || (a as any).client || '', service: (a as any).service || '', date: (a as any).dateTime?.toDate ? (a as any).dateTime.toDate().toISOString().split('T')[0] : ((a as any).dateTime || ''), status: (a as any).status || '' })));
+    if (!user) return;
 
-        // Monthly revenue and new clients: fetch all appointments first (needed for multiple metrics)
-        const apptAllSnap = await getDocs(query(collection(db, 'users', user.uid, 'appointments'), orderBy('dateTime', 'desc')));
-        const apptAll = apptAllSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+    // Real-time listeners
+    const apptQuery = query(collection(db, 'users', user.uid, 'appointments'), orderBy('dateTime', 'desc'));
+    const recentApptQuery = query(collection(db, 'users', user.uid, 'appointments'), orderBy('createdAt', 'desc'), limit(10));
+    const servicesQuery = collection(db, 'users', user.uid, 'services');
+    const clientsQuery = collection(db, 'users', user.uid, 'clients');
 
-        // Services performance (top services by revenue) AFTER apptAll is defined
-        const svcSnap = await getDocs(collection(db, 'users', user.uid, 'services'));
+    const unsubRecent = onSnapshot(recentApptQuery, (snap) => {
+      const appts = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+      setRecentAppointments(appts.map(a => ({ clientName: (a as any).clientName || (a as any).client || '', service: (a as any).service || '', date: (a as any).dateTime?.toDate ? (a as any).dateTime.toDate().toISOString().split('T')[0] : ((a as any).dateTime || ''), status: (a as any).status || '' })));
+    });
+
+    const unsubAll = onSnapshot(apptQuery, (snap) => {
+      const apptAll = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+
+      // Services performance
+      onSnapshot(servicesQuery, (svcSnap) => {
         const services = svcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
         const perf = services.map(s => {
           const svcId = s.id;
           const svcName = (s as any).name || 'N/A';
           const matchingAppts = apptAll.filter(a => {
             const ad = a as any;
-            return (ad.serviceId && ad.serviceId === svcId) || (ad.service && ad.service === svcName);
+            return ((ad.serviceId && ad.serviceId === svcId) || (ad.service && ad.service === svcName)) && (ad.status === AppointmentStatus.Confirmed || ad.status === AppointmentStatus.Finished);
           });
-            const revenue = matchingAppts.reduce((sum, a) => sum + Number((a as any).price || 0), 0);
+          const revenue = matchingAppts.reduce((sum, a) => sum + Number((a as any).price || 0), 0);
           return { serviceId: svcId, serviceName: svcName, revenue, appointments: matchingAppts.length };
         });
         setServicePerformanceData(perf);
+      });
 
-        // Build monthly revenue for current year
-        const now = new Date();
-        const months = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], Faturamento: 0, Despesas: 0 }));
-        apptAll.forEach(a => {
-          const ad = a as any;
-          const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
-          if (!dt) return;
-          if (dt.getFullYear() !== now.getFullYear()) return;
-          const m = dt.getMonth();
-          const price = Number(ad.price || 0);
+      // Monthly revenue
+      const now = new Date();
+      const months = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], Faturamento: 0, Despesas: 0 }));
+      apptAll.forEach(a => {
+        const ad = a as any;
+        const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
+        if (!dt || ad.status === AppointmentStatus.Canceled) return;
+        if (dt.getFullYear() !== now.getFullYear()) return;
+        const m = dt.getMonth();
+        const price = Number(ad.price || 0);
+        if (ad.status === AppointmentStatus.Confirmed || ad.status === AppointmentStatus.Finished) {
           months[m].Faturamento += price;
-        });
-        setMonthlyRevenueData(months.slice(0, 12));
+        }
+      });
+      setMonthlyRevenueData(months.slice(0, 12));
 
-        // Compute current month metrics
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-        const apptsThisMonth = apptAll.filter(a => {
-          const ad = a as any;
-          const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
-          return dt && dt.getFullYear() === currentYear && dt.getMonth() === currentMonth;
-        });
+      // Current month metrics
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+      const apptsThisMonth = apptAll.filter(a => {
+        const ad = a as any;
+        const dt = ad.dateTime?.toDate ? ad.dateTime.toDate() : (ad.dateTime ? new Date(ad.dateTime) : null);
+        return dt && dt.getFullYear() === currentYear && dt.getMonth() === currentMonth;
+      });
 
-        const revenue = apptsThisMonth.reduce((s, a) => s + Number((a as any).price || 0), 0);
-        const consultasCount = apptsThisMonth.filter(a => (a as any).status !== AppointmentStatus.Canceled).length;
-        const noShowCount = apptsThisMonth.filter(a => (a as any).status === AppointmentStatus.Problem).length;
+      const revenue = apptsThisMonth
+        .filter(a => (a as any).status === AppointmentStatus.Confirmed || (a as any).status === AppointmentStatus.Finished)
+        .reduce((s, a) => s + Number((a as any).price || 0), 0);
+      const consultasCount = apptsThisMonth.filter(a => (a as any).status === AppointmentStatus.Confirmed || (a as any).status === AppointmentStatus.Finished).length;
+      const noShowCount = apptsThisMonth.filter(a => (a as any).status === AppointmentStatus.Problem).length;
+      const totalConsideredForNoShow = apptsThisMonth.filter(a => 
+          (a as any).status === AppointmentStatus.Confirmed || 
+          (a as any).status === AppointmentStatus.Finished ||
+          (a as any).status === AppointmentStatus.Problem
+      ).length;
 
-        setRevenueThisMonth(revenue);
-        setConsultasThisMonth(consultasCount);
-        setTicketMedio(consultasCount > 0 ? revenue / consultasCount : 0);
-        setNoShowRate(consultasCount > 0 ? Math.round((noShowCount / consultasCount) * 10000) / 100 : 0);
+      setRevenueThisMonth(revenue);
+      setConsultasThisMonth(consultasCount);
+      setTicketMedio(consultasCount > 0 ? revenue / consultasCount : 0);
+      setNoShowRate(totalConsideredForNoShow > 0 ? Math.round((noShowCount / totalConsideredForNoShow) * 100) : 0);
+    });
 
-        // New clients per month
-        const clientsSnap = await getDocs(collection(db, 'users', user.uid, 'clients'));
-        const clients = clientsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
-        const newClientsByMonth = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], 'Novos Clientes': 0 }));
-        clients.forEach(c => {
-          const cd = c as any;
-          const created = cd.createdAt?.toDate ? cd.createdAt.toDate() : (cd.createdAt ? new Date(cd.createdAt) : null);
-          if (!created) return;
-          if (created.getFullYear() !== now.getFullYear()) return;
-          newClientsByMonth[created.getMonth()]['Novos Clientes'] += 1;
-        });
-        setNewClientsData(newClientsByMonth.slice(0, 12));
+    const unsubClients = onSnapshot(clientsQuery, (snap) => {
+      const clients = snap.docs.map(d => ({ id: d.id, ...(d.data() as any || {}) }));
+      const now = new Date();
+      const newClientsByMonth = Array.from({ length: 12 }).map((_, i) => ({ name: monthLabels[i], 'Novos Clientes': 0 }));
+      clients.forEach(c => {
+        const cd = c as any;
+        const created = cd.createdAt?.toDate ? cd.createdAt.toDate() : (cd.createdAt ? new Date(cd.createdAt) : null);
+        if (!created) return;
+        if (created.getFullYear() !== now.getFullYear()) return;
+        newClientsByMonth[created.getMonth()]['Novos Clientes'] += 1;
+      });
+      setNewClientsData(newClientsByMonth.slice(0, 12));
+    });
 
-    // reset service pagination when data refreshes
-    setServicePage(1);
-
-      } catch (e) {
-        console.warn('Falha ao carregar dados do dashboard', e);
-      }
+    // cleanup
+    return () => {
+      unsubRecent();
+      unsubAll();
+      unsubClients();
     };
-
-    fetchDashboard();
   }, [user]);
 
   useEffect(() => {
@@ -319,66 +340,7 @@ const Dashboard: React.FC = () => {
         )}
       </div>
       
-      {/* Services Performance with sorting and pagination */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center"><TrendingUp className="h-5 w-5 mr-2" /> Serviços - Receita</h3>
-          <div className="flex items-center space-x-2">
-            <label className="text-sm text-gray-600 dark:text-gray-300">Ordenar por</label>
-            <select
-              value={"revenue-desc"}
-              onChange={() => { /* reserved for future options */ }}
-              className="p-2 rounded-md bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"
-            >
-              <option value="revenue-desc">Receita (desc)</option>
-              <option value="revenue-asc">Receita (asc)</option>
-              <option value="appointments-desc">Agendamentos (desc)</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-sm text-gray-500 dark:text-gray-300 border-b">
-                <th className="py-2">Serviço</th>
-                <th className="py-2">Agendamentos</th>
-                <th className="py-2">Receita</th>
-              </tr>
-            </thead>
-            <tbody>
-              {servicePerformanceData
-                .slice()
-                .sort((a, b) => b.revenue - a.revenue)
-                .slice((servicePage - 1) * servicePageSize, servicePage * servicePageSize)
-                .map((s) => (
-                  <tr key={s.serviceId} className="border-b last:border-b-0">
-                    <td className="py-3 text-sm text-gray-700 dark:text-gray-200">{s.serviceName}</td>
-                    <td className="py-3 text-sm text-gray-700 dark:text-gray-200">{s.appointments}</td>
-                    <td className="py-3 text-sm font-medium text-gray-800 dark:text-white">R$ {Number(s.revenue || 0).toFixed(2)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination controls */}
-        <div className="mt-4 flex items-center justify-between">
-          <div className="text-sm text-gray-600 dark:text-gray-300">Mostrando {(servicePage - 1) * servicePageSize + 1} - {Math.min(servicePage * servicePageSize, servicePerformanceData.length)} de {servicePerformanceData.length}</div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setServicePage(p => Math.max(1, p - 1))}
-              disabled={servicePage === 1}
-              className="px-3 py-1 rounded-md bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 disabled:opacity-50"
-            >Anterior</button>
-            <button
-              onClick={() => setServicePage(p => Math.min(Math.ceil(servicePerformanceData.length / servicePageSize), p + 1))}
-              disabled={servicePage >= Math.ceil(servicePerformanceData.length / servicePageSize)}
-              className="px-3 py-1 rounded-md bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 disabled:opacity-50"
-            >Próxima</button>
-          </div>
-        </div>
-      </div>
+  {/* Services - removed per request */}
     </div>
   );
 };

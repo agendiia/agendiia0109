@@ -140,10 +140,22 @@ const EmailTemplateEditor: React.FC<EmailTemplateEditorProps> = ({
         htmlContent: newText
       }));
       
-      // Restaurar posição do cursor
+      // Restaurar posição do cursor. Do not force focus() since that can
+      // cause the page to scroll unexpectedly (e.g., immediately after login).
+      // If the textarea is already the active element, restore the selection;
+      // otherwise only set the selection range so next focus keeps the cursor
+      // in the intended place without stealing scroll.
       setTimeout(() => {
-        textarea.focus();
-        textarea.setSelectionRange(start + variableTag.length, start + variableTag.length);
+        try {
+          if (document.activeElement === textarea) {
+            textarea.setSelectionRange(start + variableTag.length, start + variableTag.length);
+          } else {
+            // only set selection range without focusing to avoid scroll jump
+            textarea.setSelectionRange(start + variableTag.length, start + variableTag.length);
+          }
+        } catch (err) {
+          // ignore failures
+        }
       }, 0);
     }
   };

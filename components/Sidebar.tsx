@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Calendar, Users, Megaphone, Wrench, DollarSign, Clock, CheckSquare, IdCard, CreditCard, BarChart4, LifeBuoy, Shield, Lock } from './Icons';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -128,74 +128,62 @@ const SidebarMenu: React.FC<{ onNavigate?: () => void; setCurrentView?: (v: any)
 
 const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView }) => {
   const { hasAccess } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const scrollYRef = useRef<number>(0);
   const hamburgerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
-  // Lock body scroll while mobile drawer is open and restore without jump.
+  // Close dropdown when clicking outside
   useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      // If click/touch is inside the hamburger button or inside the dropdown menu, ignore.
+      if (
+        (hamburgerRef.current && hamburgerRef.current.contains(target)) ||
+        (menuRef.current && menuRef.current.contains(target))
+      ) {
+        return;
+      }
+
+      setOpen(false);
+    };
+
     if (open) {
-      scrollYRef.current = window.scrollY || window.pageYOffset || 0;
-      // prevent layout shift: fix body in place
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${scrollYRef.current}px`;
-      document.body.style.left = '0';
-      document.body.style.right = '0';
-      document.body.style.overflow = 'hidden';
-    } else {
-      // restore
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.overflow = '';
-      // restore scroll
-      window.scrollTo(0, scrollYRef.current || 0);
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
     }
 
     return () => {
-      // cleanup in case component unmounts
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.overflow = '';
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
     };
   }, [open]);
 
-  // Open handler that prevents one-time jump/scroll by "pinning" scroll position
-  const handleOpenImmediate = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
 
-    // Blur any focused element (prevents browser auto-scroll to focused control/anchor)
-    try {
-      const active = document.activeElement as HTMLElement | null;
-      if (active && typeof active.blur === 'function') active.blur();
-    } catch (err) {
-      /* ignore */
-    }
 
-    // Pin current scroll and open drawer (body fixed avoids layout jump)
-    const current = window.scrollY || window.pageYOffset || 0;
-    document.body.style.position = 'fixed';
-    document.body.style.top = `-${current}px`;
-    document.body.style.left = '0';
-    document.body.style.right = '0';
-    document.body.style.overflow = 'hidden';
-
-    setOpen(true);
-
-    // Short timeout to restore any transient scroll effects and remove focus from hamburger
-    window.setTimeout(() => {
-      if (hamburgerRef.current) hamburgerRef.current.blur();
-      // ensure page stays at same position while drawer is open
-      window.scrollTo(0, current);
-    }, 50);
+  const handleNavigation = (view: View) => {
+    // Map view to route and navigate directly
+    const routeMap: Record<View, string> = {
+      dashboard: '/',
+      appointments: '/appointments',
+      clients: '/clients',
+      marketing: '/marketing',
+      services: '/services',
+      finance: '/finance',
+      availability: '/availability',
+      profile: '/profile',
+      subscription: '/subscription',
+      reports: '/reports',
+      'help-center': '/help-center',
+      settings: '/settings'
+    };
+    
+    navigate(routeMap[view]);
+    setCurrentView(view);
+    setOpen(false);
   };
 
   const navItems: { id: View; label: string; icon: React.ReactNode; isLocked?: boolean }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-5 w-5" /> },
     { id: 'availability', label: 'Minha Agenda', icon: <Clock className="h-5 w-5" /> },
     { id: 'appointments', label: 'Agendamentos', icon: <Calendar className="h-5 w-5" /> },
     { id: 'clients', label: 'Clientes', icon: <Users className="h-5 w-5" /> },
@@ -236,75 +224,66 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView }) => {
         </aside>
       </div>
 
-      {/* Mobile: hamburger button — use pointerdown to open immediately */}
-      <button
-        ref={hamburgerRef}
-        type="button"
-        onPointerDown={handleOpenImmediate}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }}
-        aria-label="Abrir menu"
-        className="md:hidden fixed top-4 left-4 z-50 p-2 rounded-md bg-white shadow text-gray-700 hover:bg-gray-50 transition-colors"
-        style={{ touchAction: 'manipulation' }}
-      >
-        <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-      </button>
-
-      {/* Mobile drawer */}
-      {open && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/50 z-40"
-            onPointerDown={(e) => {
-              // close on backdrop pointerdown (more responsive than click)
-              e.preventDefault();
-              e.stopPropagation();
-              setOpen(false);
-            }}
-          />
-          <div className="fixed left-0 top-0 bottom-0 w-80 max-w-sm bg-white z-50 shadow-xl overflow-auto">
-            <div className="flex items-center justify-between px-4 h-16 border-b bg-emerald-50">
-              <img src="/logo.png" alt="Agendiia" className="h-8 w-auto" />
-              <button
-                type="button"
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setOpen(false);
-                }}
-                aria-label="Fechar menu"
-                className="p-2 rounded-md hover:bg-emerald-100 transition-colors"
-              >
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+      {/* Mobile: dropdown menu instead of drawer */}
+      <div className="md:hidden fixed top-4 left-4 z-50">
+        <button
+          ref={hamburgerRef}
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-label="Abrir menu"
+          className="p-2 rounded-md bg-white shadow text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        
+        {open && (
+          <div ref={menuRef} className="absolute top-full left-0 mt-2 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-2 max-h-96 overflow-y-auto">
+            <div className="px-4 py-2 border-b border-gray-100 flex items-center">
+              <img src="/logo.png" alt="Agendiia" className="h-6 w-auto" />
             </div>
-
-            <div className="p-3">
-              <SidebarMenu
-                onNavigate={() => setOpen(false)}
-                setCurrentView={(v: View) => {
-                  setCurrentView(v);
-                  setOpen(false);
-                }}
-              />
-              <div className="mt-4 pt-4 border-t border-gray-200">
+            <nav className="py-2">
+              {navItems.map((item) => (
                 <button
-                  onClick={goAdmin}
-                  className="w-full text-left px-3 py-2 text-sm rounded hover:bg-gray-100 transition-colors text-gray-600"
+                  key={item.id}
+                  onClick={() => {
+                    if (!item.isLocked) {
+                      handleNavigation(item.id);
+                    }
+                  }}
+                  disabled={item.isLocked}
+                  className={`
+                    w-full text-left px-4 py-2 text-sm transition-colors flex items-center
+                    ${
+                      item.isLocked
+                        ? 'cursor-not-allowed text-gray-400'
+                        : currentView === item.id
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'text-gray-700 hover:bg-gray-50'
+                    }
+                  `}
+                >
+                  <span className="mr-3">{item.icon}</span>
+                  {item.label}
+                  {item.isLocked && <Lock className="h-4 w-4 ml-auto text-gray-400" />}
+                </button>
+              ))}
+              <div className="border-t border-gray-100 mt-2 pt-2">
+                <button
+                  onClick={() => {
+                    window.location.href = '/admin';
+                    setOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
                 >
                   Ir para Admin
                 </button>
               </div>
-            </div>
+            </nav>
           </div>
-        </>
-      )}
+        )}
+      </div>
     </>
   );
 };
