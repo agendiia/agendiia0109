@@ -387,7 +387,7 @@ const HelpCenter: React.FC = () => {
 
     const defaultFaqs: FAQItem[] = [
         { id: 'faq_calendar_sync', question: 'Como sincronizar minha agenda com o Google/Apple?', answer: 'A sincronização direta de calendário está em desenvolvimento. Enquanto isso, gerencie seus horários pela plataforma e ative notificações para reduzir conflitos.' },
-        { id: 'faq_create_service', question: 'Como cadastrar um novo serviço?', answer: 'Acesse Serviços > Adicionar Serviço. Defina nome, duração, preço e modalidade (Online/Presencial/Híbrido) e ative para aparecer na página pública.' },
+    { id: 'faq_create_service', question: 'Como cadastrar um novo serviço?', answer: 'Acesse Serviços > Adicionar Serviço. Defina nome, duração, preço e modalidade (Online/Presencial) e ative para aparecer na página pública.' },
         { id: 'faq_public_page', question: 'Como funciona minha página pública de agendamentos?', answer: 'Ao ativar serviços e disponibilidade, sua página pública exibe opções para que clientes escolham um horário. Compartilhe o link no Instagram, WhatsApp e site.' },
     { id: 'faq_payments', question: 'Posso receber pagamentos online?', answer: 'Sim. Conecte um gateway compatível (ex.: provedor de cartão de crédito ou Pix) em Perfil > Gateways. Depois, ative “Pagamento online” nos serviços desejados.' },
         { id: 'faq_notifications', question: 'O cliente recebe e‑mail/WhatsApp de confirmação?', answer: 'Sim. A plataforma envia confirmações e lembretes por e‑mail (e WhatsApp quando disponível). Confira os logs em Comunicações do cliente.' },

@@ -11,11 +11,7 @@ import { useAsyncOperation } from '../hooks/useAsyncOperation';
 // users/{uid}/services
 
 
-const modalityStyles: { [key in 'Online' | 'Presencial' | 'Híbrido']: string } = {
-    'Online': 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
-    'Presencial': 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
-    'Híbrido': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-};
+// modality UI removed from Services page — modality is preserved in DB when present
 
 type ActiveTab = 'services';
 
@@ -83,7 +79,8 @@ const Services: React.FC = () => {
                     description: service.description,
                     duration: service.duration,
                     price: service.price,
-                    modality: service.modality,
+                    // preserve existing modality (modal form no longer provides modality)
+                    modality: editingService?.modality || (service as any).modality || 'Online',
                     isActive: service.isActive,
                     paymentPolicy: service.paymentPolicy || '',
                     updatedAt: serverTimestamp(),
@@ -94,7 +91,8 @@ const Services: React.FC = () => {
                     description: service.description,
                     duration: service.duration,
                     price: service.price,
-                    modality: service.modality,
+                    // default modality for new services when not specified in UI
+                    modality: (service as any).modality || 'Online',
                     isActive: service.isActive ?? true,
                     paymentPolicy: service.paymentPolicy || '',
                     createdAt: serverTimestamp(),
@@ -217,10 +215,7 @@ const ServiceCard: React.FC<{ index?: number; service: Service; onEdit: () => vo
     <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-md p-5 flex flex-col justify-between hover:shadow-xl transition-all relative border-l-4 ${accent.border} ${accent.bg} dark:bg-gray-800`}>
             <div>
                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-lg font-bold text-gray-900 dark:text-white pr-10">{service.name}</h3>
-                     <span className={`px-2 py-1 text-xs font-semibold rounded-full flex-shrink-0 ${modalityStyles[service.modality]}`}>
-                        {service.modality}
-                    </span>
+                    <h3 className="text-lg font-bold text-gray-900 dark:text-white">{service.name}</h3>
                 </div>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 h-10 overflow-hidden">{service.description}</p>
                 
@@ -271,7 +266,7 @@ const ServiceModal: React.FC<{ service: Service | null; onSave: (service: Servic
         description: service?.description || '',
         duration: service?.duration || 60,
         price: service?.price || 0,
-        modality: service?.modality || 'Online',
+        // modality removed from UI; keep it in DB when present
         isActive: service?.isActive !== undefined ? service.isActive : true,
         paymentPolicy: service?.paymentPolicy || '',
     });
@@ -323,14 +318,7 @@ const ServiceModal: React.FC<{ service: Service | null; onSave: (service: Servic
                             <input type="number" name="price" id="price" step="0.01" value={formData.price} onChange={handleChange} required className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>
                         </div>
                     </div>
-                     <div>
-                        <label htmlFor="modality" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Modalidade</label>
-                        <select name="modality" id="modality" value={formData.modality} onChange={handleChange} className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600">
-                            <option value="Online">Online</option>
-                            <option value="Presencial">Presencial</option>
-                            <option value="Híbrido">Híbrido</option>
-                        </select>
-                    </div>
+                    {/* modality removed from the modal form */}
                     <div>
                         <label htmlFor="paymentPolicy" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Política de Pagamento (Opcional)</label>
                         <input type="text" name="paymentPolicy" id="paymentPolicy" placeholder="Ex: 50% no agendamento" value={formData.paymentPolicy} onChange={handleChange} className="w-full p-2 rounded-md bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"/>

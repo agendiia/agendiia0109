@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Eye, EyeOff } from './Icons';
 import { useAuth } from '@/contexts/AuthContext';
 
 const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = (props) => (
@@ -22,6 +23,7 @@ const AuthPage: React.FC = () => {
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -120,7 +122,24 @@ const AuthPage: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm mb-1">Senha</label>
-            <Input type="password" placeholder="Sua senha" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Sua senha"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring focus:ring-indigo-300 bg-white text-gray-800"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 p-1"
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
           <Button type="submit" disabled={submitting}>{isRegister ? 'Cadastrar' : 'Entrar'}</Button>
         </form>

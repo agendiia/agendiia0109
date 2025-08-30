@@ -59,7 +59,7 @@ export interface Service {
   description: string;
   duration: number; // in minutes
   price: number;
-  modality: 'Online' | 'Presencial' | 'Híbrido';
+  modality: 'Online' | 'Presencial';
   isActive: boolean;
   paymentPolicy?: string;
 }

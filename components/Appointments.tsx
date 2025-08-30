@@ -483,7 +483,7 @@ const Appointments: React.FC = () => {
               dateTime: result.dateTime ? new Date(result.dateTime) : new Date(),
               duration: service?.duration || 0,
               status: AppointmentStatus.Scheduled,
-              modality: (service?.modality === 'Híbrido' ? 'Online' : service?.modality) || 'Online',
+              modality: service?.modality || 'Online',
               price: service?.price || 0,
           };
           
@@ -1061,7 +1061,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ appointment, onSave
                     service: value,
                     price: service.price,
                     duration: service.duration,
-                    modality: service.modality === 'Híbrido' ? 'Online' : service.modality
+                    modality: service.modality
                 }));
             }
         } else {

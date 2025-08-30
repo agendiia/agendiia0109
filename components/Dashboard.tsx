@@ -303,13 +303,31 @@ const Dashboard: React.FC = () => {
               <p className="text-gray-600">{format(new Date(), "EEEE, d 'de' MMMM", { locale: ptBR })}</p>
             </div>
             <div className="text-right">
-              <div className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${
-                currentStatus.status === 'ocupado' 
-                  ? 'bg-red-100 text-red-800' 
-                  : 'bg-green-100 text-green-800'
-              }`}>
+              <div
+                tabIndex={0}
+                aria-describedby={currentStatus.status === 'livre' ? 'dashboard-status-tooltip' : undefined}
+                className={`relative inline-flex items-center px-4 py-2 rounded-full text-sm font-medium overflow-visible group ${
+                  currentStatus.status === 'ocupado'
+                    ? 'bg-red-100 text-red-800'
+                    : 'bg-green-100 text-green-800'
+                }`}
+              >
                 <Activity className="h-4 w-4 mr-2" />
-                {currentStatus.status === 'ocupado' ? 'Ocupado' : 'Livre'}
+                {currentStatus.status === 'ocupado' ? (
+                  'Ocupado'
+                ) : (
+                    <span className="inline-flex items-center relative" aria-label="Status: Livre">
+                    Livre
+                    {/* Tooltip element (shows on hover/focus via parent .group) */}
+                    <span
+                      id="dashboard-status-tooltip"
+                      className="absolute left-1/2 -translate-x-1/2 -top-12 mx-auto px-3 py-2 text-xs text-white bg-gray-800 rounded-md opacity-0 pointer-events-none transition-opacity duration-150 z-50 group-hover:opacity-100 group-focus:opacity-100 group-focus-within:opacity-100 whitespace-normal break-words text-center max-w-xs"
+                      role="tooltip"
+                    >
+                      Sem agendamentos no momento — horário disponível para novos agendamentos
+                    </span>
+                  </span>
+                )}
               </div>
               {currentStatus.nextAppointment && (
                 <p className="text-sm text-gray-600 mt-2">

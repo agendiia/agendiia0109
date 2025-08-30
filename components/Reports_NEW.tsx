@@ -350,7 +350,7 @@ export const Reports: React.FC = () => {
         expenseCategories: expenseCategories.slice(0, 3)
       };
 
-      const insights = await generateBusinessInsights(context);
+  const insights = await generateBusinessInsights(servicePerformance.slice(0, 3), peakTimes);
       setAiInsights(insights);
     } catch (error) {
       console.error('Erro ao gerar insights:', error);
