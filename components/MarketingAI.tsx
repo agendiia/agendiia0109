@@ -360,8 +360,8 @@ const MarketingAI: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Gerador de Bio (IA)</h1>
-          <p className="text-sm text-gray-600 dark:text-gray-300">Crie 2–5 variações de biografia profissional usando Gemini.</p>
+          <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Marketing com IA</h1>
+          <p className="text-sm text-gray-600 dark:text-gray-300">Ferramentas de marketing assistidas por IA — biografias, posts, e‑mails e anúncios para promover seu negócio.</p>
         </div>
       </div>
 

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { SupportTicket, TicketCategory, TicketStatus, TaskPriority, TicketResponse, KnowledgeBaseArticle, ArticleCategory, FAQItem } from '../types';
 import { Plus, LifeBuoy, X, Flag, Send, Paperclip, Search, BookOpen, HelpCircle, ChevronRight, Wrench, DollarSign, Megaphone, Calendar as CalendarIcon, ArrowLeft } from './Icons';
 import { db } from '@/services/firebase';
-import { collection, doc, onSnapshot, orderBy, query, addDoc, serverTimestamp, getDoc, writeBatch } from 'firebase/firestore';
+import { collection, doc, onSnapshot, orderBy, query, addDoc, serverTimestamp, getDoc, writeBatch, getDocs } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
 
 // --- CATEGORY ICONS/META (static UI helpers) ---
@@ -40,7 +40,8 @@ const FAQItemComponent: React.FC<{ faq: FAQItem; isOpen: boolean; onToggle: () =
         </button>
         {isOpen && (
             <div className="p-4 pt-0">
-                <p className="text-gray-600 dark:text-gray-300">{faq.answer}</p>
+                {/* FAQ answers may contain HTML; render safely for authored content */}
+                <div className="text-gray-600 dark:text-gray-300" dangerouslySetInnerHTML={{ __html: faq.answer }} />
             </div>
         )}
     </div>
@@ -336,7 +337,7 @@ const TicketsView: React.FC = () => {
 // --- FINAL HELP CENTER ---
 
 const HelpCenter: React.FC = () => {
-    type Tab = 'knowledgeBase' | 'tickets';
+    type Tab = 'knowledgeBase' | 'tickets' | 'support';
     const [activeTab, setActiveTab] = useState<Tab>('knowledgeBase');
     const [selectedArticle, setSelectedArticle] = useState<KnowledgeBaseArticle | null>(null);
     const [articles, setArticles] = useState<KnowledgeBaseArticle[]>([]);
@@ -387,31 +388,85 @@ const HelpCenter: React.FC = () => {
 
     const defaultFaqs: FAQItem[] = [
         { id: 'faq_calendar_sync', question: 'Como sincronizar minha agenda com o Google/Apple?', answer: 'A sincronização direta de calendário está em desenvolvimento. Enquanto isso, gerencie seus horários pela plataforma e ative notificações para reduzir conflitos.' },
-    { id: 'faq_create_service', question: 'Como cadastrar um novo serviço?', answer: 'Acesse Serviços > Adicionar Serviço. Defina nome, duração, preço e modalidade (Online/Presencial) e ative para aparecer na página pública.' },
+        { id: 'faq_create_service', question: 'Como cadastrar um novo serviço?', answer: 'Acesse Serviços > Adicionar Serviço. Defina nome, duração, preço e modalidade (Online/Presencial) e ative para aparecer na página pública.' },
         { id: 'faq_public_page', question: 'Como funciona minha página pública de agendamentos?', answer: 'Ao ativar serviços e disponibilidade, sua página pública exibe opções para que clientes escolham um horário. Compartilhe o link no Instagram, WhatsApp e site.' },
-    { id: 'faq_payments', question: 'Posso receber pagamentos online?', answer: 'Sim. Conecte um gateway compatível (ex.: provedor de cartão de crédito ou Pix) em Perfil > Gateways. Depois, ative “Pagamento online” nos serviços desejados.' },
+        { id: 'faq_payments', question: 'Posso receber pagamentos online?', answer: 'Sim. Conecte um gateway compatível (ex.: provedor de cartão de crédito ou Pix) em Perfil > Gateways. Depois, ative “Pagamento online” nos serviços desejados.' },
         { id: 'faq_notifications', question: 'O cliente recebe e‑mail/WhatsApp de confirmação?', answer: 'Sim. A plataforma envia confirmações e lembretes por e‑mail (e WhatsApp quando disponível). Confira os logs em Comunicações do cliente.' },
         { id: 'faq_availability', question: 'Como ajusto minha disponibilidade e bloqueios?', answer: 'Em Disponibilidade, defina dias/intervalos de atendimento e crie exceções (férias, eventos) para impedir novos agendamentos nesses períodos.' },
-        { id: 'faq_reschedule', question: 'Como remarcar ou cancelar um agendamento?', answer: 'Abra o agendamento na Agenda e use “Remarcar” ou “Cancelar”. O cliente é notificado automaticamente e o horário volta a ficar disponível.' },
+        { id: 'faq_reschedule', question: 'Como remarcar ou cancelar um agendamento?', answer: `
+          <div class="help-remarcar-cancelar">
+            <p>Você tem duas opções principais para remarcar ou cancelar um agendamento:</p>
+
+            <section>
+              <h3>🔄 Remarcar Agendamento</h3>
+              <ol>
+                <li>Clique no agendamento desejado para abrir a janela <strong>Editar Agendamento</strong>.</li>
+                <li>No campo <strong>Data e Hora</strong>, selecione o novo dia e horário.</li>
+                <li>Confirme se o <strong>Status</strong> permanece como "Agendado" (ou outro adequado).</li>
+                <li>Clique em <strong>Salvar Agendamento</strong> para confirmar a remarcação.</li>
+              </ol>
+            </section>
+
+            <section>
+              <h3>❌ Cancelar Agendamento</h3>
+              <ol>
+                <li>Clique no agendamento que deseja cancelar.</li>
+                <li>No campo <strong>Status</strong>, altere para <strong>Cancelado</strong>.</li>
+                <li>Clique em <strong>Salvar Agendamento</strong> para registrar o cancelamento.</li>
+              </ol>
+            </section>
+          </div>
+        ` },
         { id: 'faq_reports', question: 'Onde vejo meus relatórios?', answer: 'Acesse Relatórios Avançados para métricas de serviços, horários de pico e tendências mensais, baseados nos seus atendimentos reais.' },
         { id: 'faq_profile_brand', question: 'Como melhorar meu perfil e credibilidade?', answer: 'Adicione foto, banner, bio, redes sociais, credenciais e depoimentos aprovados. Isso aumenta conversão e confiança na página pública.' },
         { id: 'faq_testimonials', question: 'Como coletar depoimentos de clientes?', answer: 'Na página Perfil, copie o link público de depoimentos e compartilhe com seus clientes. Aprove/apague comentários na seção Depoimentos.' },
         { id: 'faq_cancel_policy', question: 'Onde defino política de cancelamento?', answer: 'Em Perfil > Política de Cancelamento. Ela aparece na página pública e nas comunicações para alinhar expectativas dos clientes.' },
         { id: 'faq_support', question: 'Como falar com o suporte?', answer: 'Use a aba “Meus Tickets” na Central de Ajuda para abrir um ticket. Descreva o problema e acompanhe as respostas da equipe.' },
+        // Novas FAQs adicionadas
+        { id: 'faq_gateway_diff', question: 'Qual a diferença entre os gateways de pagamento (Stripe, Mercado Pago)?', answer: 'Cada gateway tem suas próprias taxas, prazos de recebimento e meios de pagamento aceitos (cartão de crédito, Pix, boleto). Recomendamos visitar o site de cada um para ver qual se encaixa melhor no seu negócio. A integração é feita em `Perfil > Gateways` e você pode ter mais de um ativo.' },
+        { id: 'faq_payment_local', question: 'Como configuro a opção "Pagamento no Local"?', answer: 'Ao criar ou editar um serviço em `Serviços`, na seção de pagamento, basta **não selecionar** a opção "Exigir pagamento online". Isso permitirá que seus clientes agendem sem pagar adiantado. O pagamento será gerenciado por você no momento do atendimento.' },
+        { id: 'faq_refund', question: 'Como faço para emitir um reembolso?', answer: 'O reembolso de pagamentos online deve ser feito diretamente no painel do seu gateway de pagamento (Stripe ou Mercado Pago). Após realizar o estorno por lá, recomendamos alterar o status do agendamento para "Cancelado" e, se desejar, adicionar uma nota interna no `Financeiro` para manter seus registros organizados.' },
+        { id: 'faq_marketing_ai', question: 'O que é e como usar o "Marketing AI"?', answer: 'O "Marketing AI" é seu assistente de criação de conteúdo. Ele usa inteligência artificial para gerar textos para posts de redes sociais, e-mails promocionais e anúncios. Acesse `Marketing > Marketing AI`, descreva o objetivo da sua campanha e deixe a IA criar sugestões para você.' },
+        { id: 'faq_email_templates', question: 'Como funcionam os templates de e-mail e a integração com o Brevo?', answer: 'Você pode personalizar os e-mails de confirmação, lembrete e cancelamento em `Marketing > Templates de E-mail`. A Agendiia cuida do envio padrão. Para campanhas avançadas e maior controle, você pode conectar sua conta Brevo (antiga Sendinblue) e usar seus próprios remetentes e templates.' },
+        { id: 'faq_service_buffer', question: 'Como adicionar um "intervalo" ou "tempo de preparação" entre os atendimentos?', answer: 'Atualmente, a melhor forma de garantir um intervalo é ajustar a duração do seu serviço para incluir o tempo de preparação. Por exemplo, se um atendimento dura 50 minutos e você precisa de 10 minutos para preparar, cadastre o serviço com duração de 60 minutos. Estamos trabalhando em uma função específica para intervalos.' },
+        { id: 'faq_resource_management', question: 'O que é a "Gestão de Recursos" e como utilizá-la?', answer: 'A Gestão de Recursos é ideal para negócios que possuem equipamentos ou salas limitadas (ex: uma maca de massagem, uma sala de reunião). Em `Configurações > Recursos`, você pode cadastrar seus recursos. Depois, ao criar um serviço, você pode associá-lo a um recurso específico. O sistema então bloqueará agendamentos para outros serviços que usem o mesmo recurso no mesmo horário.' },
+        { id: 'faq_palette_selector', question: 'Posso personalizar as cores da minha página de agendamento?', answer: 'Sim! Para alinhar a página de agendamento com a sua marca, vá em `Configurações > Paleta de Cores`. Lá você pode escolher entre paletas pré-definidas ou criar a sua, alterando as cores principais que seus clientes verão.' },
+        { id: 'faq_plan_upgrade', question: 'Quais são as limitações do meu plano atual e como posso fazer um upgrade?', answer: 'As limitações de recursos do seu plano são indicadas por banners ou ícones de cadeado. Para ver um comparativo completo dos planos e fazer um upgrade para desbloquear mais funcionalidades, acesse a página `Assinatura` no menu principal. O upgrade é imediato após a confirmação.' },
+        // Perguntas sobre planos e conta
+        { id: 'faq_change_plan', question: 'Posso mudar de plano a qualquer momento?', answer: 'Sim. Você pode fazer upgrade ou downgrade de plano a qualquer momento pelo painel de Assinatura. A cobrança será ajustada automaticamente conforme o novo plano e o período já utilizado.' },
+        { id: 'faq_trial_expire', question: 'O que acontece se eu não escolher um plano após o período de teste?', answer: 'Se você não ativar um plano até o final dos 14 dias de teste, sua conta ficará com acesso limitado: não será possível criar novos agendamentos até que um plano seja escolhido. Seus dados permanecerão preservados.' },
+        { id: 'faq_cancel_subscription', question: 'Como cancelo minha assinatura?', answer: 'No painel de Planos e Assinatura, selecione a opção "Cancelar Assinatura" (quando disponível). O cancelamento interrompe a renovação automática; você manterá acesso ao sistema até o fim do ciclo já pago.' },
+        { id: 'faq_delete_account', question: 'E se eu quiser excluir minha conta definitivamente?', answer: 'A exclusão definitiva da conta pode ser feita em Configurações > Conta ou solicitada ao suporte. Atenção: esse processo é irreversível e apagará todos os seus dados.' },
     ];
 
-    const seedDefaultFaqs = async () => {
+    const syncDefaultFaqs = async () => {
         if (!isAdmin || seeding) return;
         setSeeding(true);
         try {
             const helpDoc = doc(db, 'platform', 'helpCenter');
             const faqsCol = collection(helpDoc, 'faqs');
+
+            // 1. Get existing questions from Firestore to prevent duplicates
+            const existingFaqsSnap = await getDocs(faqsCol);
+            const existingQuestions = new Set(existingFaqsSnap.docs.map(d => d.data().question));
+
+            // 2. Filter out FAQs that already exist
+            const newFaqs = defaultFaqs.filter(f => !existingQuestions.has(f.question));
+
+            if (newFaqs.length === 0) {
+                // Optional: Add a toast or console message here to inform the user
+                console.log("Nenhuma nova FAQ para adicionar. O banco de dados já está sincronizado.");
+                return; // Exit if there's nothing to do
+            }
+
+            // 3. Add only the new FAQs
             const batch = writeBatch(db);
-            defaultFaqs.forEach(f => {
+            newFaqs.forEach(f => {
                 const ref = doc(faqsCol); // auto-id
                 batch.set(ref, { question: f.question, answer: f.answer, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
             });
             await batch.commit();
+
         } finally {
             setSeeding(false);
         }
@@ -449,6 +504,12 @@ const HelpCenter: React.FC = () => {
                     >
                         <LifeBuoy className="h-5 w-5" /> Meus Tickets
                     </button>
+                    <button
+                        onClick={() => setActiveTab('support')}
+                        className={`flex items-center gap-2 py-3 px-1 border-b-2 text-sm font-medium transition-colors ${activeTab === 'support' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                    >
+                        <Megaphone className="h-5 w-5" /> Fale com o Suporte
+                    </button>
                 </nav>
             </div>
 
@@ -456,16 +517,32 @@ const HelpCenter: React.FC = () => {
             <div className="animate-fade-in">
                 {activeTab === 'knowledgeBase' && (
                     <div className="space-y-4">
-                        {isAdmin && !kbLoading && faqs.length === 0 && (
+                        {isAdmin && (
                             <div className="p-3 rounded-md bg-amber-50 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-200 dark:border-amber-800 flex items-center justify-between">
-                                <span>Nenhuma FAQ encontrada. Você pode criar um conjunto padrão.</span>
-                                <button disabled={seeding} onClick={seedDefaultFaqs} className={`px-3 py-1.5 rounded-md bg-indigo-600 text-white ${seeding? 'opacity-60 cursor-not-allowed':''}`}>{seeding ? 'Criando…' : 'Criar FAQs padrão'}</button>
+                                <span>Sincronize as novas FAQs do código com o banco de dados.</span>
+                                <button disabled={seeding} onClick={syncDefaultFaqs} className={`px-3 py-1.5 rounded-md bg-indigo-600 text-white ${seeding? 'opacity-60 cursor-not-allowed':''}`}>{seeding ? 'Sincronizando…' : 'Sincronizar Novas FAQs'}</button>
                             </div>
                         )}
                         <KnowledgeBaseView loading={kbLoading} onArticleSelect={setSelectedArticle} articles={articles} faqs={faqs} />
                     </div>
                 )}
                 {activeTab === 'tickets' && <TicketsView />}
+                {activeTab === 'support' && (
+                    <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-md">
+                        <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">Fale com o Suporte</h2>
+                        <p className="text-gray-600 dark:text-gray-300 mb-4">Entre em contato conosco pelo WhatsApp ou e‑mail:</p>
+                        <div className="space-y-3">
+                            <a href="https://wa.me/5551981304994" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-3 px-4 py-3 rounded-lg bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-300 hover:brightness-95">
+                                <span className="font-semibold">WhatsApp</span>
+                                <span className="text-sm">+55 51 98130-4994</span>
+                            </a>
+                            <a href="mailto:contato@agendiia.com.br" className="inline-flex items-center gap-3 px-4 py-3 rounded-lg bg-indigo-50 text-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 hover:brightness-95">
+                                <span className="font-semibold">E‑mail</span>
+                                <span className="text-sm">contato@agendiia.com.br</span>
+                            </a>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
