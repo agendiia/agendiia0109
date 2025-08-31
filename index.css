@@ -47,17 +47,17 @@ html, body, #root { height: 100%; }
     background-color: #F9FAFB !important;
   }
 
-  /* Text hierarchy with proper contrast */
+  /* Text hierarchy with improved contrast for mobile */
   .dark\:text-white, .text-gray-900 {
     color: #111827 !important; /* Headers/primary text */
   }
   
   .dark\:text-gray-100, .dark\:text-gray-300, .text-gray-600 {
-    color: #6B7280 !important; /* Secondary text */
+    color: #374151 !important; /* Secondary text - darker gray-700 */
   }
 
   .text-gray-500, .dark\:text-gray-400 {
-    color: #9CA3AF !important; /* Muted text */
+    color: #4B5563 !important; /* Muted text - darker gray-600 */
   }
 
   /* Border hierarchy */
