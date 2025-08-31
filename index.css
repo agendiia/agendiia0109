@@ -52,12 +52,21 @@ html, body, #root { height: 100%; }
     color: #111827 !important; /* Headers/primary text */
   }
   
-  .dark\:text-gray-100, .dark\:text-gray-300, .text-gray-600 {
-    color: #1c2129 !important; /* Secondary text - darker gray-700 */
+  .dark\:text-gray-100, .dark\:text-gray-200, .dark\:text-gray-300, .text-gray-600, .text-gray-500, .dark\:text-gray-400, .text-gray-400 {
+    color: #1c2129 !important; /* Secondary and muted text - unified to darker gray */
   }
 
-  .text-gray-500, .dark\:text-gray-400 {
-    color: #0c0e11 !important; /* Muted text - darker gray-600 */
+  /* Universal placeholder styling for better visibility */
+  ::placeholder,
+  input::placeholder,
+  textarea::placeholder {
+    color: #4B5563 !important; /* gray-600 */
+    opacity: 1 !important; /* Firefox default is 0.54 */
+  }
+
+  /* Make icons darker */
+  .text-gray-400, .dark\:text-gray-500 {
+    color: #374151 !important; /* gray-700 */
   }
 
   /* Border hierarchy */
