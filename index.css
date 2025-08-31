@@ -30,24 +30,74 @@ html, body, #root { height: 100%; }
 
 /* Force light theme on small screens (mobile devices) to avoid system dark-mode making the LP/panel dark */
 @media (max-width: 767px) {
-  /* Global page background and text */
+  /* Global page background - soft light gray */
   html, body, #root {
     background-color: #F8FAFC !important; /* tailwind gray-50 */
-    color: #111827 !important; /* tailwind gray-900 */
+    color: #374151 !important; /* tailwind gray-700 */
   }
 
-  /* Neutralize common dark: background utilities used across the app */
-  .dark\:bg-gray-900, .dark\:bg-gray-800, .dark\:bg-gray-700, .dark\:bg-gray-800 \/20, .dark\:bg-gray-900 \/20 {
-    background-color: transparent !important;
+  /* Card/panel backgrounds - clean white with subtle shadow */
+  .bg-white, .dark\:bg-gray-800, .dark\:bg-gray-900 {
+    background-color: #FFFFFF !important;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1) !important;
   }
 
-  /* Neutralize common dark: text utilities */
-  .dark\:text-white, .dark\:text-gray-100, .dark\:text-gray-300 {
-    color: inherit !important;
+  /* Secondary backgrounds - very light gray */
+  .bg-gray-50, .dark\:bg-gray-700, .bg-gray-100 {
+    background-color: #F9FAFB !important;
   }
 
-  /* Neutralize common dark: border colors */
-  .dark\:border-gray-700, .dark\:border-gray-800 {
-    border-color: rgba(0,0,0,0.06) !important; /* soft border like light mode */
+  /* Text hierarchy with proper contrast */
+  .dark\:text-white, .text-gray-900 {
+    color: #111827 !important; /* Headers/primary text */
+  }
+  
+  .dark\:text-gray-100, .dark\:text-gray-300, .text-gray-600 {
+    color: #6B7280 !important; /* Secondary text */
+  }
+
+  .text-gray-500, .dark\:text-gray-400 {
+    color: #9CA3AF !important; /* Muted text */
+  }
+
+  /* Border hierarchy */
+  .border-gray-200, .dark\:border-gray-700, .dark\:border-gray-800 {
+    border-color: #E5E7EB !important; /* Light borders */
+  }
+
+  .border-gray-300, .dark\:border-gray-600 {
+    border-color: #D1D5DB !important; /* Medium borders */
+  }
+
+  /* Button and interactive elements */
+  .bg-indigo-600, .bg-theme {
+    background-color: var(--theme-color) !important;
+    color: white !important;
+  }
+
+  /* Success/warning/danger colors remain vibrant */
+  .bg-green-100, .text-green-800 {
+    background-color: #DCFCE7 !important;
+    color: #166534 !important;
+  }
+
+  .bg-yellow-100, .text-yellow-800 {
+    background-color: #FEF3C7 !important;
+    color: #92400E !important;
+  }
+
+  .bg-red-100, .text-red-800 {
+    background-color: #FEE2E2 !important;
+    color: #991B1B !important;
+  }
+
+  /* Tables and structured content */
+  .bg-gray-50.dark\:bg-gray-700 {
+    background-color: #F9FAFB !important;
+  }
+
+  /* Ensure proper spacing and readability */
+  .space-y-6 > * + *, .space-y-4 > * + * {
+    margin-top: 1rem !important;
   }
 }
