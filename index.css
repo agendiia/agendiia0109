@@ -27,3 +27,27 @@ html, body, #root { height: 100%; }
 .gradient-theme {
   background-image: linear-gradient(to right, var(--theme-color), var(--accent-color));
 }
+
+/* Force light theme on small screens (mobile devices) to avoid system dark-mode making the LP/panel dark */
+@media (max-width: 767px) {
+  /* Global page background and text */
+  html, body, #root {
+    background-color: #F8FAFC !important; /* tailwind gray-50 */
+    color: #111827 !important; /* tailwind gray-900 */
+  }
+
+  /* Neutralize common dark: background utilities used across the app */
+  .dark\:bg-gray-900, .dark\:bg-gray-800, .dark\:bg-gray-700, .dark\:bg-gray-800 \/20, .dark\:bg-gray-900 \/20 {
+    background-color: transparent !important;
+  }
+
+  /* Neutralize common dark: text utilities */
+  .dark\:text-white, .dark\:text-gray-100, .dark\:text-gray-300 {
+    color: inherit !important;
+  }
+
+  /* Neutralize common dark: border colors */
+  .dark\:border-gray-700, .dark\:border-gray-800 {
+    border-color: rgba(0,0,0,0.06) !important; /* soft border like light mode */
+  }
+}
