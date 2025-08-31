@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste das Ações de Usuário - Admin Panel</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-functions.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 20px; border: 1px solid #ccc; border-radius: 8px; }
+        .result { margin: 10px 0; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .warning { background-color: #fff3cd; color: #856404; }
+        button { margin: 5px; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn-danger { background-color: #dc3545; color: white; }
+        .btn-warning { background-color: #ffc107; color: black; }
+        .btn-success { background-color: #28a745; color: white; }
+        input, select { margin: 5px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Teste das Ações de Usuário - Admin Panel</h1>
+    
+    <div class="test-section">
+        <h2>📋 Status da Autenticação</h2>
+        <div id="auth-status">Verificando...</div>
+        <button onclick="checkAuthStatus()" class="btn-primary">Verificar Autenticação</button>
+    </div>
+
+    <div class="test-section">
+        <h2>👥 Teste das Funções de Usuário</h2>
+        
+        <div>
+            <h3>🔄 Toggle Status de Usuário</h3>
+            <input type="text" id="toggle-user-id" placeholder="ID do usuário" />
+            <button onclick="testToggleStatus()" class="btn-warning">Testar Toggle Status</button>
+            <div id="toggle-result"></div>
+        </div>
+
+        <div>
+            <h3>✏️ Atualizar Usuário</h3>
+            <input type="text" id="update-user-id" placeholder="ID do usuário" />
+            <input type="text" id="update-name" placeholder="Nome" />
+            <input type="email" id="update-email" placeholder="Email" />
+            <select id="update-plan">
+                <option value="Trial">Trial</option>
+                <option value="Profissional">Profissional</option>
+                <option value="Avançado">Avançado</option>
+            </select>
+            <select id="update-status">
+                <option value="Ativo">Ativo</option>
+                <option value="Suspenso">Suspenso</option>
+            </select>
+            <button onclick="testUpdateUser()" class="btn-primary">Testar Atualização</button>
+            <div id="update-result"></div>
+        </div>
+
+        <div>
+            <h3>🔓 Forçar Reset de Senha</h3>
+            <input type="text" id="reset-user-id" placeholder="ID do usuário" />
+            <button onclick="testForceReset()" class="btn-warning">Testar Reset Senha</button>
+            <div id="reset-result"></div>
+        </div>
+
+        <div>
+            <h3>👤 Impersonar Usuário</h3>
+            <input type="text" id="impersonate-user-id" placeholder="ID do usuário" />
+            <button onclick="testImpersonate()" class="btn-success">Testar Impersonação</button>
+            <div id="impersonate-result"></div>
+        </div>
+
+        <div>
+            <h3>🗑️ Excluir Usuário (CUIDADO!)</h3>
+            <input type="text" id="delete-user-id" placeholder="ID do usuário" />
+            <input type="text" id="delete-confirmation" placeholder="Digite 'CONFIRMAR' para prosseguir" />
+            <button onclick="testDeleteUser()" class="btn-danger">Testar Exclusão</button>
+            <div id="delete-result"></div>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>📊 Lista de Usuários</h2>
+        <button onclick="loadUsers()" class="btn-primary">Carregar Usuários</button>
+        <div id="users-list"></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
+        import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js';
+        import { getFirestore, collection, onSnapshot } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js';
+        import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-functions.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDle5HF4ylU2K1_wGUS4odwk-RDcWHNp1M",
+            authDomain: "timevee-53a3c.firebaseapp.com",
+            projectId: "timevee-53a3c",
+            storageBucket: "timevee-53a3c.appspot.com",
+            messagingSenderId: "628542376232",
+            appId: "1:628542376232:web:b1512d940c837370b3e81d"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const functions = getFunctions(app);
+
+        window.auth = auth;
+        window.db = db;
+        window.functions = functions;
+
+        function showResult(elementId, message, type = 'success') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = `<div class="result ${type}">${message}</div>`;
+        }
+
+        window.checkAuthStatus = function() {
+            const user = auth.currentUser;
+            if (user) {
+                showResult('auth-status', `✅ Usuário autenticado: ${user.email} (${user.uid})`, 'success');
+            } else {
+                showResult('auth-status', '❌ Usuário não autenticado', 'error');
+            }
+        };
+
+        window.testToggleStatus = async function() {
+            const userId = document.getElementById('toggle-user-id').value;
+            if (!userId) {
+                showResult('toggle-result', 'Por favor, informe o ID do usuário', 'error');
+                return;
+            }
+
+            try {
+                const toggleStatus = httpsCallable(functions, 'toggleUserStatus');
+                const result = await toggleStatus({ userId });
+                showResult('toggle-result', `✅ Status alterado com sucesso: ${JSON.stringify(result.data)}`, 'success');
+            } catch (error) {
+                showResult('toggle-result', `❌ Erro ao alterar status: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        };
+
+        window.testUpdateUser = async function() {
+            const userId = document.getElementById('update-user-id').value;
+            const name = document.getElementById('update-name').value;
+            const email = document.getElementById('update-email').value;
+            const plan = document.getElementById('update-plan').value;
+            const status = document.getElementById('update-status').value;
+
+            if (!userId) {
+                showResult('update-result', 'Por favor, informe o ID do usuário', 'error');
+                return;
+            }
+
+            try {
+                const updateUser = httpsCallable(functions, 'updatePlatformUser');
+                const result = await updateUser({
+                    userId,
+                    userData: { name, email, plan, status }
+                });
+                showResult('update-result', `✅ Usuário atualizado: ${JSON.stringify(result.data)}`, 'success');
+            } catch (error) {
+                showResult('update-result', `❌ Erro ao atualizar usuário: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        };
+
+        window.testForceReset = async function() {
+            const userId = document.getElementById('reset-user-id').value;
+            if (!userId) {
+                showResult('reset-result', 'Por favor, informe o ID do usuário', 'error');
+                return;
+            }
+
+            try {
+                const forceReset = httpsCallable(functions, 'forcePasswordReset');
+                const result = await forceReset({ userId });
+                showResult('reset-result', `✅ Reset de senha forçado: ${JSON.stringify(result.data)}`, 'success');
+            } catch (error) {
+                showResult('reset-result', `❌ Erro ao forçar reset: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        };
+
+        window.testImpersonate = async function() {
+            const targetUserId = document.getElementById('impersonate-user-id').value;
+            if (!targetUserId) {
+                showResult('impersonate-result', 'Por favor, informe o ID do usuário', 'error');
+                return;
+            }
+
+            try {
+                const impersonate = httpsCallable(functions, 'impersonateUser');
+                const result = await impersonate({ targetUserId });
+                showResult('impersonate-result', `✅ Token de impersonação criado: ${result.data.token ? 'Token OK' : 'Sem token'}`, 'success');
+            } catch (error) {
+                showResult('impersonate-result', `❌ Erro ao impersonar: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        };
+
+        window.testDeleteUser = async function() {
+            const userId = document.getElementById('delete-user-id').value;
+            const confirmation = document.getElementById('delete-confirmation').value;
+
+            if (!userId) {
+                showResult('delete-result', 'Por favor, informe o ID do usuário', 'error');
+                return;
+            }
+
+            if (confirmation !== 'CONFIRMAR') {
+                showResult('delete-result', 'Por favor, digite "CONFIRMAR" para prosseguir', 'error');
+                return;
+            }
+
+            try {
+                const deleteUser = httpsCallable(functions, 'deletePlatformUser');
+                const result = await deleteUser({ userId });
+                showResult('delete-result', `✅ Usuário excluído: ${JSON.stringify(result.data)}`, 'success');
+            } catch (error) {
+                showResult('delete-result', `❌ Erro ao excluir usuário: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        };
+
+        window.loadUsers = function() {
+            const usersRef = collection(db, 'users');
+            onSnapshot(usersRef, (snapshot) => {
+                const users = [];
+                snapshot.forEach((doc) => {
+                    users.push({ id: doc.id, ...doc.data() });
+                });
+                
+                let html = '<h3>📝 Usuários encontrados:</h3>';
+                if (users.length === 0) {
+                    html += '<p>Nenhum usuário encontrado</p>';
+                } else {
+                    html += '<table border="1" style="width: 100%; border-collapse: collapse;">';
+                    html += '<tr><th>ID</th><th>Nome</th><th>Email</th><th>Plano</th><th>Status</th></tr>';
+                    users.forEach(user => {
+                        html += `<tr>
+                            <td style="padding: 8px; font-family: monospace; font-size: 12px;">${user.id}</td>
+                            <td style="padding: 8px;">${user.name || 'N/A'}</td>
+                            <td style="padding: 8px;">${user.email || 'N/A'}</td>
+                            <td style="padding: 8px;">${user.plan || 'N/A'}</td>
+                            <td style="padding: 8px;">${user.status || 'N/A'}</td>
+                        </tr>`;
+                    });
+                    html += '</table>';
+                }
+                document.getElementById('users-list').innerHTML = html;
+            }, (error) => {
+                showResult('users-list', `❌ Erro ao carregar usuários: ${error.message}`, 'error');
+            });
+        };
+
+        // Auto-check auth status on load
+        onAuthStateChanged(auth, (user) => {
+            checkAuthStatus();
+        });
+    </script>
+</body>
+</html>

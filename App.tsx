@@ -20,6 +20,7 @@ import LockedFeature from './components/LockedFeature';
 import { ModalProvider } from './components/ModalManager';
 import TrialEndingBanner from './components/TrialEndingBanner';
 import { ErrorProvider } from './components/ErrorHandling';
+import { ToastProvider } from './components/Toast';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 
 type View = 'dashboard' | 'appointments' | 'clients' | 'marketing' | 'services' | 'finance' | 'availability' | 'profile' | 'reports' | 'help-center' | 'settings' | 'subscription';
@@ -176,7 +177,9 @@ const App: React.FC = () => {
     <BrowserRouter>
       <ErrorProvider>
         <ModalProvider>
-          <RouterWrapper />
+          <ToastProvider>
+            <RouterWrapper />
+          </ToastProvider>
         </ModalProvider>
       </ErrorProvider>
     </BrowserRouter>

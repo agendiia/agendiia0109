@@ -12,6 +12,16 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
+    function isAdminByEmail() {
+      return request.auth != null && 
+             request.auth.token.email != null &&
+             (request.auth.token.email in ['admin@agendiia.com.br', 'contato@agendiia.com.br', 'contato@agendiia', 'ferramenta.developer@gmail.com']);
+    }
+
+    function hasAdminAccess() {
+      return request.auth != null && (isAdmin() || isAdminByEmail());
+    }
+
     // --- PUBLIC WRITE ACCESS (must come before general rules) ---
     // Allow public creation of testimonials and appointments
     match /users/{userId}/testimonials/{testimonialId} {
@@ -53,12 +63,12 @@ service cloud.firestore {
 
     match /platform/{document=**} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null; // Temporariamente permissivo para debug
+      allow write: if hasAdminAccess(); // Apenas admins podem escrever
     }
 
     match /platform_settings/{document=**} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null; // Temporariamente permissivo para debug
+      allow write: if hasAdminAccess(); // Apenas admins podem escrever
     }
 
     // --- PUBLIC SLUGS ---

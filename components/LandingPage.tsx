@@ -134,7 +134,7 @@ const LandingPage: React.FC = () => {
             <div className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-theme-light text-theme-light">Sua agenda, seu crescimento, sua IA</div>
             <h1 className="mt-4 text-4xl sm:text-5xl font-extrabold leading-tight text-gray-900 dark:text-white">
               <span className="gradient-theme bg-clip-text text-transparent">
-                A Agenda completa para profissionais que querem mais tempo, clientes e resultados.
+                A Agenda com IA para profissionais que querem mais tempo, clientes e resultados.
               </span>
             </h1>
             <p className="mt-4 text-lg text-gray-600 dark:text-gray-300">O assistente digital que trabalha por você. Agende, lembre, analise e encante – tudo em um só lugar, com IA.</p>
@@ -385,9 +385,9 @@ const LandingPage: React.FC = () => {
             price="R$ 49"
             features={[
               'Página pública de agendamentos',
-              'Perfil com bio, redes e banner',
+              'Perfil personalizado para profissionais',
               'Agenda por serviço e exceções',
-              'Pix estático integrado',
+              'Receba por Pix e Cartão de Crédito',
               'E-mails de confirmação',
             ]}
             ctaHref="/login?signup=1"
@@ -397,8 +397,8 @@ const LandingPage: React.FC = () => {
             price="R$ 79"
             features={[
               'Tudo do Profissional',
-              'Cartão de Crédito (checkout) integrado',
-              'Lembrete automático 24h',
+              'Análises inteligentes com IA',
+              'Sugestões Financeiras com IA',
               'Recursos de marketing com IA',
               'Relatórios avançados',
             ]}

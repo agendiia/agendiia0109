@@ -38,6 +38,7 @@ export class RateLimiter {
         lastRequest: now
       };
       this.limits.set(key, rateLimit);
+      console.log(`Rate limit: ${endpoint} - New window for ${userId} (1/${this.maxRequests})`);
       return;
     }
 
@@ -45,6 +46,7 @@ export class RateLimiter {
     if (rateLimit.window >= windowStart) {
       if (rateLimit.count >= this.maxRequests) {
         // Rate limit exceeded
+        console.warn(`Rate limit exceeded: ${endpoint} - User ${userId} (${rateLimit.count}/${this.maxRequests})`);
         await this.logViolation(userId, endpoint, rateLimit.count);
         throw new HttpsError(
           'resource-exhausted',
@@ -55,11 +57,13 @@ export class RateLimiter {
       // Increment count
       rateLimit.count++;
       rateLimit.lastRequest = now;
+      console.log(`Rate limit: ${endpoint} - User ${userId} (${rateLimit.count}/${this.maxRequests})`);
     } else {
       // New window
       rateLimit.count = 1;
       rateLimit.window = now;
       rateLimit.lastRequest = now;
+      console.log(`Rate limit: ${endpoint} - New window for ${userId} (1/${this.maxRequests})`);
     }
 
     this.limits.set(key, rateLimit);

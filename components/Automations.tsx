@@ -181,7 +181,17 @@ const Automations: React.FC = () => {
         try {
             setSaving(true);
             console.log('Salvando templates:', templates);
-            console.log('Usuário atual:', user); // Para debug
+            console.log('Usuário atual:', user);
+            
+            // Verificar se usuário está autenticado
+            if (!user) {
+                throw new Error('Usuário não autenticado');
+            }
+            
+            // Verificar se email está verificado
+            if (!user.emailVerified) {
+                throw new Error('Email não verificado');
+            }
             
             const docRef = doc(db, 'platform', 'automations');
             console.log('Referência do documento:', docRef);
@@ -189,6 +199,8 @@ const Automations: React.FC = () => {
             const dataToSave = {
                 templates,
                 updatedAt: serverTimestamp(),
+                lastUpdatedBy: user.email,
+                version: Date.now() // Para tracking de versão
             };
             console.log('Dados a salvar:', dataToSave);
             
@@ -200,8 +212,23 @@ const Automations: React.FC = () => {
         } catch (e) {
             console.error('Erro detalhado ao salvar templates:', e);
             console.error('Stack trace:', (e as Error).stack);
-            setStatusMsg(`Erro ao salvar os modelos de e-mail: ${e instanceof Error ? e.message : 'Erro desconhecido'}`);
-            setTimeout(() => setStatusMsg(''), 5000);
+            
+            // Melhor tratamento de erros específicos
+            let errorMessage = 'Erro desconhecido';
+            if (e instanceof Error) {
+                if (e.message.includes('permission-denied')) {
+                    errorMessage = 'Sem permissão para salvar. Verifique se você é administrador.';
+                } else if (e.message.includes('network')) {
+                    errorMessage = 'Erro de conexão. Verifique sua internet.';
+                } else if (e.message.includes('auth')) {
+                    errorMessage = 'Erro de autenticação. Faça login novamente.';
+                } else {
+                    errorMessage = e.message;
+                }
+            }
+            
+            setStatusMsg(`Erro ao salvar os modelos de e-mail: ${errorMessage}`);
+            setTimeout(() => setStatusMsg(''), 8000);
         } finally {
             setSaving(false);
         }

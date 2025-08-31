@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getContentAnalytics = exports.dismissAnnouncement = exports.getActiveAnnouncements = exports.createAnnouncement = exports.getAnnouncements = exports.createWikiPage = exports.getWikiPages = exports.publishLandingPage = exports.createLandingPage = exports.getLandingPages = exports.updateEmailTemplate = exports.createEmailTemplate = exports.getEmailTemplates = exports.getRateLimitStats = exports.monitorResources = exports.createCostAlert = exports.getCostAlerts = exports.getExternalServiceUsage = exports.getResourceViolations = exports.updateUserQuotas = exports.getResourceUsage = exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.sendDailyReminders = exports.onAppointmentCreated = exports.sendBrevoEmail = exports.createMercadoPagoPreference = void 0;
+exports.getContentAnalytics = exports.dismissAnnouncement = exports.getActiveAnnouncements = exports.createAnnouncement = exports.getAnnouncements = exports.createWikiPage = exports.getWikiPages = exports.publishLandingPage = exports.createLandingPage = exports.getLandingPages = exports.updateEmailTemplate = exports.createEmailTemplate = exports.getEmailTemplates = exports.getRateLimitStats = exports.monitorResources = exports.createCostAlert = exports.getCostAlerts = exports.getExternalServiceUsage = exports.getResourceViolations = exports.updateUserQuotas = exports.getResourceUsage = exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.reactivateStripeSubscription = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.deletePlatformUser = exports.updatePlatformUser = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.sendDailyReminders = exports.onAppointmentCreated = exports.sendBrevoEmail = exports.createMercadoPagoPreference = void 0;
 exports.finalizeReservationInternal = finalizeReservationInternal;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -235,9 +235,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         const data = snap.data();
         const clientEmail = data.clientEmail || data.email;
         const clientName = data.clientName || 'Cliente';
-        if (!clientEmail) {
-            console.log('onAppointmentCreated - sem clientEmail: vai tentar notificar apenas o profissional');
-        }
+        // Prossegue mesmo sem email do cliente para tentar notificar o profissional
         const serviceName = data.service || 'Atendimento';
         const dt = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
         // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
@@ -275,19 +273,12 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         let body = defaults.body;
         if (autoSnap.exists) {
             const au = autoSnap.data();
-            console.log('onAppointmentCreated - Dados de automação encontrados:', au);
             const tmpl = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_sched') : null;
-            console.log('onAppointmentCreated - Template encontrado:', tmpl);
             if (tmpl?.subject)
                 subject = tmpl.subject;
             if (tmpl?.body)
                 body = tmpl.body;
         }
-        else {
-            console.log('onAppointmentCreated - Nenhuma automação configurada, usando padrões');
-        }
-        console.log('onAppointmentCreated - Subject final:', subject);
-        console.log('onAppointmentCreated - Body final:', body);
         const vars = {
             clientName,
             professionalName,
@@ -304,16 +295,11 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         vars['nome do serviço'] = serviceName;
         vars['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         vars['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-        console.log('onAppointmentCreated - Variáveis criadas:', vars);
-        console.log('onAppointmentCreated - Cliente:', clientName);
-        console.log('onAppointmentCreated - Profissional:', professionalName);
-        console.log('onAppointmentCreated - Serviço:', serviceName);
-        console.log('onAppointmentCreated - Data/Hora:', dt);
         if (clientEmail) {
             const html = applyTemplate(body, vars);
             const subj = applyTemplate(subject, vars);
             const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
-            console.log('onAppointmentCreated - email do cliente enviado messageId:', msgId);
+            // email do cliente enviado
             await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         else {
@@ -321,21 +307,15 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         }
         // Also notify the professional via email (try multiple fallbacks for email)
         try {
-            console.log('onAppointmentCreated - iniciando bloco de notificação ao profissional para userId:', userId);
             const profProfile = userProfileSnap; // já buscado antes
             let profEmail = profProfile.exists ? profProfile.data()?.email : undefined;
-            console.log('onAppointmentCreated - email no profile/main:', profEmail);
             // fallback 1: users/{userId} top-level doc
             if (!profEmail) {
                 try {
                     const userDoc = await admin.firestore().doc(`users/${userId}`).get();
                     if (userDoc && userDoc.exists) {
                         const tmp = userDoc.data()?.email;
-                        console.log('onAppointmentCreated - email no users/{userId} doc:', tmp);
                         profEmail = tmp || profEmail;
-                    }
-                    else {
-                        console.log('onAppointmentCreated - users/{userId} doc não existe para fallback de email');
                     }
                 }
                 catch (e) {
@@ -346,7 +326,6 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
             if (!profEmail) {
                 try {
                     const authRec = await admin.auth().getUser(userId);
-                    console.log('onAppointmentCreated - email no auth record:', authRec?.email);
                     profEmail = authRec?.email || profEmail;
                 }
                 catch (e) {
@@ -354,12 +333,10 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                 }
             }
             // fallback 3 (último recurso): se ainda não houver email, não envia
-            console.log('onAppointmentCreated - professional email resolvido (final):', profEmail || null);
             if (profEmail) {
                 // Carregar template específico para profissional
                 const autoData = autoSnap.exists ? autoSnap.data() : null;
                 const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t) => t.id === 't_sched_professional') : null;
-                console.log('onAppointmentCreated - template profissional encontrado:', !!profTmpl, profTmpl?.id);
                 const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars);
                 const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Você recebeu um novo agendamento.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
                 // Garantir que variáveis críticas existam
@@ -370,9 +347,8 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                 if (!vars.professionalName)
                     vars.professionalName = professionalName;
                 const profHtml = applyTemplate(profBodyTemplate, vars);
-                console.log('onAppointmentCreated - enviando email ao profissional para:', profEmail);
                 const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubject, profHtml);
-                console.log('onAppointmentCreated - email do profissional enviado messageId:', pMsgId);
+                // email profissional enviado
                 try {
                     await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
                 }
@@ -381,7 +357,6 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                 }
             }
             else {
-                console.log('onAppointmentCreated - nenhum email de profissional encontrado, não enviando');
                 try {
                     await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
                 }
@@ -906,14 +881,164 @@ exports.listPlatformUsers = (0, https_1.onCall)({ region: 'us-central1' }, async
     }
     return { users: out };
 });
-// Toggle suspension (status field only)
-exports.toggleUserStatus = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
+// Update platform user data
+exports.updatePlatformUser = (0, https_1.onCall)({
+    region: 'us-central1',
+    cors: [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:5175',
+        'http://localhost:5176',
+        'https://timevee-53a3c.web.app',
+        'https://timevee-53a3c.firebaseapp.com',
+        'https://agendiia.com.br',
+        'https://www.agendiia.com.br'
+    ]
+}, async (req) => {
     await assertIsPlatformAdmin(req);
-    const { userId, suspend } = (req.data || {});
+    const { userId, userData } = (req.data || {});
     if (!userId)
         throw new https_1.HttpsError('invalid-argument', 'userId faltando');
-    await admin.firestore().doc(`users/${userId}`).set({ status: suspend ? 'Suspenso' : 'Ativo', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    return { ok: true };
+    if (!userData)
+        throw new https_1.HttpsError('invalid-argument', 'userData faltando');
+    try {
+        // Validate the user exists
+        const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+        if (!userDoc.exists)
+            throw new https_1.HttpsError('not-found', 'Usuário não encontrado');
+        const currentData = userDoc.data();
+        // Prepare update data with validation
+        const updateData = {
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        // Only update allowed fields
+        if (userData.name)
+            updateData.name = userData.name;
+        if (userData.email)
+            updateData.email = userData.email;
+        if (userData.plan)
+            updateData.plan = userData.plan;
+        if (userData.status)
+            updateData.status = userData.status;
+        // Update user document
+        await admin.firestore().doc(`users/${userId}`).update(updateData);
+        // Record audit log
+        await admin.firestore().collection('platform_audit_logs').add({
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            adminId: req.auth?.uid,
+            action: 'USER_UPDATED',
+            details: `Updated user: ${userData.email || userId}`,
+            metadata: {
+                before: currentData,
+                after: updateData
+            }
+        });
+        return { ok: true, message: 'Usuário atualizado com sucesso' };
+    }
+    catch (error) {
+        console.error('Error updating user:', error);
+        throw new https_1.HttpsError('internal', `Falha ao atualizar usuário: ${error.message}`);
+    }
+});
+// Delete user safely with all related data
+exports.deletePlatformUser = (0, https_1.onCall)({
+    region: 'us-central1',
+    cors: [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:5175',
+        'http://localhost:5176',
+        'https://timevee-53a3c.web.app',
+        'https://timevee-53a3c.firebaseapp.com',
+        'https://agendiia.com.br',
+        'https://www.agendiia.com.br'
+    ]
+}, async (req) => {
+    await assertIsPlatformAdmin(req);
+    const { userId } = (req.data || {});
+    if (!userId)
+        throw new https_1.HttpsError('invalid-argument', 'userId faltando');
+    try {
+        // Get user data before deletion for audit log
+        const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+        const userData = userDoc.data();
+        if (!userDoc.exists)
+            throw new https_1.HttpsError('not-found', 'Usuário não encontrado');
+        // Delete user document
+        await admin.firestore().doc(`users/${userId}`).delete();
+        // Delete from Firebase Auth if exists
+        try {
+            await admin.auth().deleteUser(userId);
+        }
+        catch (authError) {
+            console.warn(`Failed to delete auth user ${userId}:`, authError);
+        }
+        // Clean up related collections (appointments, etc.)
+        const batch = admin.firestore().batch();
+        // Delete user's appointments
+        const appointmentsQuery = await admin.firestore()
+            .collection('appointments')
+            .where('userId', '==', userId)
+            .get();
+        appointmentsQuery.docs.forEach(doc => {
+            batch.delete(doc.ref);
+        });
+        // Delete user's transactions
+        const transactionsQuery = await admin.firestore()
+            .collection('platform_transactions')
+            .where('userId', '==', userId)
+            .get();
+        transactionsQuery.docs.forEach(doc => {
+            batch.delete(doc.ref);
+        });
+        await batch.commit();
+        // Record audit log
+        await admin.firestore().collection('platform_audit_logs').add({
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            adminId: req.auth?.uid,
+            action: 'USER_DELETED',
+            details: `Deleted user: ${userData?.email || userId}`,
+            metadata: { deletedUserData: userData }
+        });
+        return { ok: true, message: 'Usuário excluído com sucesso' };
+    }
+    catch (error) {
+        console.error('Error deleting user:', error);
+        throw new https_1.HttpsError('internal', `Falha ao excluir usuário: ${error.message}`);
+    }
+});
+// Toggle suspension (status field only)
+exports.toggleUserStatus = (0, https_1.onCall)({
+    region: 'us-central1',
+    cors: [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:5175',
+        'http://localhost:5176',
+        'https://timevee-53a3c.web.app',
+        'https://timevee-53a3c.firebaseapp.com',
+        'https://agendiia.com.br',
+        'https://www.agendiia.com.br'
+    ]
+}, async (req) => {
+    await assertIsPlatformAdmin(req);
+    const { userId } = (req.data || {});
+    if (!userId)
+        throw new https_1.HttpsError('invalid-argument', 'userId faltando');
+    // Get current user status
+    const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+    if (!userDoc.exists)
+        throw new https_1.HttpsError('not-found', 'Usuário não encontrado');
+    const currentStatus = userDoc.data()?.status || 'Ativo';
+    const newStatus = currentStatus === 'Ativo' ? 'Suspenso' : 'Ativo';
+    await admin.firestore().doc(`users/${userId}`).set({
+        status: newStatus,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    return { ok: true, newStatus };
 });
 // Force password reset: revoke tokens so next login requires reauth (UI will send reset email)
 exports.forcePasswordReset = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
@@ -921,9 +1046,26 @@ exports.forcePasswordReset = (0, https_1.onCall)({ region: 'us-central1' }, asyn
     const { userId } = (req.data || {});
     if (!userId)
         throw new https_1.HttpsError('invalid-argument', 'userId faltando');
-    await admin.auth().revokeRefreshTokens(userId);
-    await admin.firestore().doc(`users/${userId}`).set({ forcePasswordReset: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    return { ok: true };
+    try {
+        // Ensure the user exists in Auth before attempting to revoke tokens
+        try {
+            await admin.auth().getUser(userId);
+        }
+        catch (e) {
+            throw new https_1.HttpsError('not-found', 'Usuário não encontrado');
+        }
+        // Revoke refresh tokens so next sign-in requires re-authentication
+        await admin.auth().revokeRefreshTokens(userId);
+        // Mark in Firestore so client UI can trigger reset email or show the flag
+        await admin.firestore().doc(`users/${userId}`).set({ forcePasswordReset: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        return { ok: true };
+    }
+    catch (err) {
+        console.error('forcePasswordReset error for userId', userId, err);
+        if (err instanceof https_1.HttpsError)
+            throw err;
+        throw new https_1.HttpsError('internal', err?.message || 'Falha ao forçar reset de senha');
+    }
 });
 // Impersonate: create a custom token for target user
 exports.impersonateUser = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
@@ -1159,38 +1301,150 @@ exports.cancelStripeSubscription = (0, https_1.onCall)({ region: 'us-central1' }
     const uid = request.auth?.uid;
     if (!uid)
         throw new https_1.HttpsError('unauthenticated', 'Usuário precisa estar autenticado');
+    console.log('cancelStripeSubscription called for uid:', uid);
     try {
         const db = admin.firestore();
         const userRef = db.doc(`users/${uid}`);
         const userSnap = await userRef.get();
         const userData = userSnap.exists ? userSnap.data() : {};
         const stripeCustomerId = userData.stripeCustomerId;
-        if (!stripeCustomerId)
-            throw new https_1.HttpsError('failed-precondition', 'Stripe customer não encontrado para este usuário');
-        // List active subscriptions for this customer
-        const subs = await stripe.subscriptions.list({ customer: stripeCustomerId, status: 'active', limit: 50 });
-        if (!subs.data || subs.data.length === 0) {
-            return { ok: false, message: 'Nenhuma assinatura ativa encontrada' };
+        console.log('User data loaded. stripeCustomerId:', stripeCustomerId ? 'exists' : 'not found');
+        // Allow the client to request immediate cancellation or cancel at period end
+        const { cancelAtPeriodEnd = true, immediate = false, reason = null } = (request.data || {});
+        // Handle case where user doesn't have a Stripe customer yet (e.g., trial users)
+        if (!stripeCustomerId) {
+            console.log('No stripeCustomerId found, handling as trial user');
+            // This could be a trial user who wants to prevent future billing
+            // Just update Firestore to indicate they don't want to continue
+            const now = new Date().toISOString();
+            await userRef.set({
+                subscriptionStatus: 'CancelRequested',
+                cancelRequestedAt: now,
+                cancellationReason: reason || 'trial_cancel',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            console.log('Trial cancellation recorded successfully');
+            return {
+                ok: true,
+                message: 'Cancelamento registrado para usuário sem customer Stripe',
+                processed: [{ type: 'trial_cancel', cancelRequestedAt: now }]
+            };
         }
-        const canceled = [];
+        console.log('Processing Stripe customer with subscriptions...');
+        // List subscriptions for this customer (include any statuses so we can handle trialing/past_due)
+        const subs = await stripe.subscriptions.list({ customer: stripeCustomerId, limit: 100 });
+        if (!subs.data || subs.data.length === 0) {
+            return { ok: false, message: 'Nenhuma assinatura encontrada' };
+        }
+        const processed = [];
         for (const s of subs.data) {
             try {
-                const updated = await stripe.subscriptions.update(s.id, { cancel_at_period_end: true });
-                const periodEnd = updated.current_period_end ? new Date(updated.current_period_end * 1000).toISOString() : null;
-                canceled.push({ id: s.id, cancelAtPeriodEnd: true, periodEnd });
-                // Update Firestore user doc with cancellation request info
-                await userRef.set({ subscriptionStatus: 'CancelRequested', cancelRequestedAt: admin.firestore.FieldValue.serverTimestamp(), endsAt: periodEnd }, { merge: true });
+                if (immediate) {
+                    // Cancel immediately
+                    const deleted = await stripe.subscriptions.del(s.id);
+                    const periodEnd = deleted.current_period_end ? new Date(deleted.current_period_end * 1000).toISOString() : null;
+                    processed.push({ id: s.id, canceledImmediately: true, periodEnd });
+                    await userRef.set({ subscriptionStatus: 'Inativo', canceledAt: admin.firestore.FieldValue.serverTimestamp(), endsAt: periodEnd, cancellationReason: reason || null }, { merge: true });
+                }
+                else if (cancelAtPeriodEnd) {
+                    const updated = await stripe.subscriptions.update(s.id, { cancel_at_period_end: true });
+                    const periodEnd = updated.current_period_end ? new Date(updated.current_period_end * 1000).toISOString() : null;
+                    processed.push({ id: s.id, cancelAtPeriodEnd: true, periodEnd });
+                    await userRef.set({ subscriptionStatus: 'CancelRequested', cancelRequestedAt: admin.firestore.FieldValue.serverTimestamp(), endsAt: periodEnd, cancellationReason: reason || null }, { merge: true });
+                }
+                else {
+                    // Fallback: schedule cancel at period end
+                    const updated = await stripe.subscriptions.update(s.id, { cancel_at_period_end: true });
+                    const periodEnd = updated.current_period_end ? new Date(updated.current_period_end * 1000).toISOString() : null;
+                    processed.push({ id: s.id, cancelAtPeriodEnd: true, periodEnd });
+                    await userRef.set({ subscriptionStatus: 'CancelRequested', cancelRequestedAt: admin.firestore.FieldValue.serverTimestamp(), endsAt: periodEnd, cancellationReason: reason || null }, { merge: true });
+                }
             }
             catch (e) {
-                console.warn('cancelStripeSubscription: failed to cancel', s.id, e);
+                console.warn('cancelStripeSubscription: failed to process', s.id, e);
             }
         }
-        return { ok: true, canceled };
+        return { ok: true, processed };
     }
     catch (err) {
         if (err instanceof https_1.HttpsError)
             throw err;
         throw new https_1.HttpsError('internal', err?.message || 'Falha ao cancelar assinatura');
+    }
+});
+// Callable: reactivate a subscription that was scheduled to cancel at period end
+exports.reactivateStripeSubscription = (0, https_1.onCall)({ region: 'us-central1' }, async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid)
+        throw new https_1.HttpsError('unauthenticated', 'Usuário precisa estar autenticado');
+    console.log('reactivateStripeSubscription called for uid:', uid);
+    try {
+        const db = admin.firestore();
+        const userRef = db.doc(`users/${uid}`);
+        const userSnap = await userRef.get();
+        const userData = userSnap.exists ? userSnap.data() : {};
+        const stripeCustomerId = userData.stripeCustomerId;
+        console.log('User data loaded. stripeCustomerId:', stripeCustomerId ? 'exists' : 'not found');
+        console.log('Current subscriptionStatus:', userData.subscriptionStatus);
+        // Handle case where user doesn't have a Stripe customer yet (e.g., trial users)
+        if (!stripeCustomerId) {
+            console.log('No stripeCustomerId found, checking for local cancellation');
+            // If they don't have a Stripe customer, check if they have a local cancellation request
+            if (userData.subscriptionStatus === 'CancelRequested') {
+                console.log('Found local cancellation, reactivating trial user');
+                // Reset their status to active/trialing
+                await userRef.set({
+                    subscriptionStatus: 'Ativo',
+                    cancelRequestedAt: admin.firestore.FieldValue.delete(),
+                    cancellationReason: admin.firestore.FieldValue.delete(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+                console.log('Trial user reactivated successfully');
+                return {
+                    ok: true,
+                    message: 'Cancelamento local removido para usuário sem customer Stripe',
+                    reactivated: [{ type: 'trial_reactivate', status: 'Ativo' }]
+                };
+            }
+            else {
+                console.log('No local cancellation found for trial user');
+                return { ok: false, message: 'Usuário não possui assinatura ou cancelamento para reativar' };
+            }
+        }
+        const subs = await stripe.subscriptions.list({ customer: stripeCustomerId, limit: 100 });
+        if (!subs.data || subs.data.length === 0) {
+            return { ok: false, message: 'Nenhuma assinatura encontrada' };
+        }
+        const reactivated = [];
+        for (const s of subs.data) {
+            try {
+                if (s.cancel_at_period_end) {
+                    const updated = await stripe.subscriptions.update(s.id, { cancel_at_period_end: false });
+                    const periodEnd = updated.current_period_end ? new Date(updated.current_period_end * 1000).toISOString() : null;
+                    reactivated.push({ id: s.id, reactivated: true, periodEnd });
+                    await userRef.set({
+                        subscriptionStatus: 'Ativo',
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        endsAt: periodEnd
+                    }, { merge: true });
+                }
+                else if (s.status === 'canceled') {
+                    reactivated.push({ id: s.id, reactivated: false, reason: 'already_canceled' });
+                }
+                else {
+                    reactivated.push({ id: s.id, reactivated: false, reason: 'no_cancel_scheduled' });
+                }
+            }
+            catch (e) {
+                console.warn('reactivateStripeSubscription: failed for', s.id, e);
+            }
+        }
+        return { ok: true, reactivated };
+    }
+    catch (err) {
+        if (err instanceof https_1.HttpsError)
+            throw err;
+        throw new https_1.HttpsError('internal', err?.message || 'Falha ao reativar assinatura');
     }
 });
 // Analytics and Metrics Functions
@@ -1235,7 +1489,14 @@ exports.getPlatformAnalytics = (0, https_1.onCall)({ region: 'us-central1' }, as
             usageMetrics,
             conversionMetrics,
             appointmentMetrics,
-            period: { start: start.toISOString(), end: end.toISOString() }
+            period: { start: start.toISOString(), end: end.toISOString() },
+            dataSource: {
+                users: users.length,
+                transactions: transactions.length,
+                appointments: appointments.length,
+                isRealData: users.length > 0 && transactions.length > 0,
+                timestamp: new Date().toISOString()
+            }
         };
     }
     catch (error) {

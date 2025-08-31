@@ -151,16 +151,21 @@ const AdminPanel: React.FC = () => {
     const handleOpenUserModal = (user: PlatformUser | null) => { setEditingUser(user); setIsUserModalOpen(true); };
     const handleSaveUser = async (userToSave: PlatformUser) => {
         try {
-            await updateDoc(doc(db, 'users', userToSave.id), {
-                name: userToSave.name,
-                email: userToSave.email,
-                plan: userToSave.plan,
-                status: userToSave.status,
-                updatedAt: serverTimestamp(),
-            } as any);
-            showTemporaryMessage(setUserActionStatus, 'Usuário salvo.');
-        } catch {
-            showTemporaryMessage(setUserActionStatus, 'Falha ao salvar usuário.');
+            const functions = getFunctions();
+            const callUpdateUser = httpsCallable(functions, 'updatePlatformUser');
+            await callUpdateUser({ 
+                userId: userToSave.id,
+                userData: {
+                    name: userToSave.name,
+                    email: userToSave.email,
+                    plan: userToSave.plan,
+                    status: userToSave.status
+                }
+            });
+            showTemporaryMessage(setUserActionStatus, 'Usuário salvo com sucesso.');
+        } catch (error: any) {
+            console.error('Erro ao salvar usuário:', error);
+            showTemporaryMessage(setUserActionStatus, `Falha ao salvar usuário: ${error.message || 'Erro desconhecido'}`);
         }
         setIsUserModalOpen(false);
     };
@@ -170,24 +175,30 @@ const AdminPanel: React.FC = () => {
         const newStatus = user.status === UserStatus.Active ? UserStatus.Suspended : UserStatus.Active;
         if (window.confirm(`Tem certeza que deseja alterar o status de ${user.name} para "${newStatus}"?`)) {
             try {
-                await updateDoc(doc(db, 'users', userId), { status: newStatus, updatedAt: serverTimestamp() } as any);
+                const functions = getFunctions();
+                const callToggleStatus = httpsCallable(functions, 'toggleUserStatus');
+                await callToggleStatus({ userId });
                 showTemporaryMessage(setUserActionStatus, `Status de ${user.name} alterado para ${newStatus}.`);
                 // Audit log
                 try { await callRecordAction({ action: 'USER_STATUS_CHANGE', details: `User ${user.email} -> ${newStatus}` }); } catch {}
-            } catch {
-                showTemporaryMessage(setUserActionStatus, 'Falha ao alterar status.');
+            } catch (error: any) {
+                console.error('Erro ao alterar status:', error);
+                showTemporaryMessage(setUserActionStatus, `Falha ao alterar status: ${error.message || 'Erro desconhecido'}`);
             }
         }
     };
     const handleDeleteUser = async (userId: string) => {
         const user = users.find(u => u.id === userId);
         if (!user) return;
-        if (window.confirm(`ATENÇÃO: Esta ação é irreversível. Tem certeza que deseja excluir permanentemente o usuário ${user.name}?`)) {
+        if (window.confirm(`ATENÇÃO: Esta ação é irreversível. Tem certeza que deseja excluir permanentemente o usuário ${user.name}? Todos os dados relacionados (agendamentos, transações) também serão removidos.`)) {
             try {
-                await deleteDoc(doc(db, 'users', userId));
+                const functions = getFunctions();
+                const callDeleteUser = httpsCallable(functions, 'deletePlatformUser');
+                await callDeleteUser({ userId });
                 showTemporaryMessage(setUserActionStatus, `Usuário ${user.name} excluído com sucesso.`);
-            } catch {
-                showTemporaryMessage(setUserActionStatus, 'Falha ao excluir usuário.');
+            } catch (error: any) {
+                console.error('Erro ao excluir usuário:', error);
+                showTemporaryMessage(setUserActionStatus, `Falha ao excluir usuário: ${error.message || 'Erro desconhecido'}`);
             }
         }
     };
@@ -665,14 +676,39 @@ const UserManagement: React.FC<{ users: PlatformUser[], onEdit: (user: PlatformU
     const [filterStatus, setFilterStatus] = useState<'Todos' | UserStatus>('Todos');
     const [filterPlan, setFilterPlan] = useState<'Todos' | 'Trial' | 'Profissional' | 'Avançado'>('Todos');
     const [filterVerified, setFilterVerified] = useState<'Todos' | 'Verificado' | 'Não Verificado'>('Todos');
-    const [impersonating, setImpersonating] = useState<string | null>(null);
+    // ...existing code...
     const [actionMsg, setActionMsg] = useState<string>('');
 
-    const functions = getFunctions();
-    const callToggleStatus = httpsCallable(functions, 'toggleUserStatus');
-    const callForceReset = httpsCallable(functions, 'forcePasswordReset');
-    const callImpersonate = httpsCallable(functions, 'impersonateUser');
-    const callRecordActionUM = httpsCallable(functions, 'recordAdminAction');
+    // Initialize Firebase services with error handling
+    const functions = React.useMemo(() => {
+        try {
+            return getFunctions();
+        } catch (error) {
+            console.error('Erro ao inicializar Firebase Functions:', error);
+            return null;
+        }
+    }, []);
+
+    const callRecordActionUM = React.useMemo(() => {
+        if (!functions) return null;
+        try {
+            return httpsCallable(functions, 'recordAdminAction');
+        } catch (error) {
+            console.error('Erro ao criar callable recordAdminAction:', error);
+            return null;
+        }
+    }, [functions]);
+
+    // Callable to force password reset for a platform user
+    const callForceReset = React.useMemo(() => {
+        if (!functions) return null;
+        try {
+            return httpsCallable(functions, 'forcePasswordReset');
+        } catch (error) {
+            console.error('Erro ao criar callable forcePasswordReset:', error);
+            return null;
+        }
+    }, [functions]);
 
     const sorted = [...users]
         .filter(u => (filterStatus === 'Todos' || u.status === filterStatus))
@@ -699,28 +735,28 @@ const UserManagement: React.FC<{ users: PlatformUser[], onEdit: (user: PlatformU
         }
     };
 
-    const impersonate = async (uid: string) => {
-        setImpersonating(uid);
-        try {
-            const res: any = await callImpersonate({ targetUserId: uid });
-            const token = res?.data?.token;
-            if (!token) throw new Error('Token ausente');
-            // dynamic import to avoid auth circular
-            const { signInWithCustomToken } = await import('firebase/auth');
-            const { auth } = await import('@/services/firebase');
-            await signInWithCustomToken(auth, token);
-            setActionMsg('Agora visualizando como o usuário.');
-            try { await callRecordActionUM({ action: 'IMPERSONATION_START', details: `Impersonated userId=${uid}` }); } catch {}
-        } catch (e: any) {
-            setActionMsg(e.message || 'Falha ao impersonar');
-        } finally {
-            setImpersonating(null);
-        }
-    };
+    // Impersonation action removed from admin UI per request.
 
     const forceReset = async (uid: string) => {
+        if (!callForceReset) {
+            setActionMsg('❌ Função de reset de senha não disponível. Verifique a conexão com Firebase Functions.');
+            return;
+        }
+
         if (!window.confirm('Forçar redefinição de senha? O usuário precisará criar nova.')) return;
-        try { await callForceReset({ userId: uid }); setActionMsg('Reset forçado.'); } catch { setActionMsg('Falha ao forçar reset'); }
+        try { 
+            await callForceReset({ userId: uid }); 
+            setActionMsg('✅ Reset de senha forçado com sucesso. O usuário precisará redefinir a senha no próximo login.'); 
+            // Audit log
+            try { 
+                if (callRecordActionUM) {
+                    await callRecordActionUM({ action: 'FORCE_PASSWORD_RESET', details: `Forced password reset for userId=${uid}` }); 
+                }
+            } catch {}
+        } catch (error: any) { 
+            console.error('Erro ao forçar reset:', error);
+            setActionMsg(`❌ Falha ao forçar reset: ${error.message || 'Erro desconhecido'}`); 
+        }
     };
 
     return (
@@ -784,7 +820,7 @@ const UserManagement: React.FC<{ users: PlatformUser[], onEdit: (user: PlatformU
                                     <button onClick={() => onEdit(user)} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-blue-500" title="Editar"><Edit className="h-4 w-4" /></button>
                                     <button onClick={() => onToggleStatus(user.id)} className={`p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 ${user.status === UserStatus.Active ? 'hover:text-red-500' : 'hover:text-green-500'}`} title={user.status === UserStatus.Active ? 'Suspender' : 'Reativar'}>{user.status === UserStatus.Active ? <Ban className="h-4 w-4" /> : <Check className="h-4 w-4" />}</button>
                                     <button onClick={() => forceReset(user.id)} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-orange-500" title="Forçar reset senha">R</button>
-                                    <button disabled={impersonating === user.id} onClick={() => impersonate(user.id)} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-indigo-500 disabled:opacity-40" title="Impersonar">{impersonating === user.id ? '…' : '👤'}</button>
+                                    {/* Impersonation button removed */}
                                     <button onClick={() => onDelete(user.id)} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-red-500" title="Excluir"><Trash className="h-4 w-4" /></button>
                                 </div>
                             </td>

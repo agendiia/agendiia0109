@@ -62,24 +62,28 @@ class RateLimiter {
                 lastRequest: now
             };
             this.limits.set(key, rateLimit);
+            console.log(`Rate limit: ${endpoint} - New window for ${userId} (1/${this.maxRequests})`);
             return;
         }
         // Check if we're within the same window
         if (rateLimit.window >= windowStart) {
             if (rateLimit.count >= this.maxRequests) {
                 // Rate limit exceeded
+                console.warn(`Rate limit exceeded: ${endpoint} - User ${userId} (${rateLimit.count}/${this.maxRequests})`);
                 await this.logViolation(userId, endpoint, rateLimit.count);
                 throw new https_1.HttpsError('resource-exhausted', `Rate limit exceeded. Maximum ${this.maxRequests} requests per ${this.windowMs / 1000} seconds.`);
             }
             // Increment count
             rateLimit.count++;
             rateLimit.lastRequest = now;
+            console.log(`Rate limit: ${endpoint} - User ${userId} (${rateLimit.count}/${this.maxRequests})`);
         }
         else {
             // New window
             rateLimit.count = 1;
             rateLimit.window = now;
             rateLimit.lastRequest = now;
+            console.log(`Rate limit: ${endpoint} - New window for ${userId} (1/${this.maxRequests})`);
         }
         this.limits.set(key, rateLimit);
     }

@@ -17,7 +17,12 @@ const AdminApp: React.FC = () => {
         return;
       }
       try {
-        const FALLBACK_ADMINS = ['admin@agendiia.com.br', 'contato@agendiia.com.br', 'contato@agendiia'];
+        const FALLBACK_ADMINS = [
+          'admin@agendiia.com.br', 
+          'contato@agendiia.com.br', 
+          'contato@agendiia',
+          'ferramenta.developer@gmail.com' // Adicionar email de desenvolvimento
+        ];
 
         // helper to extract emails from various shapes stored in Firestore
         const extractEmails = (data: any): string[] => {

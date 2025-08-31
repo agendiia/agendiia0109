@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnóstico Admin - Agendiia</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-result {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        #logs {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .metric {
+            display: inline-block;
+            margin: 10px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #495057;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Diagnóstico do Painel Administrativo</h1>
+    <p>Este teste verifica os 4 problemas de alta prioridade identificados:</p>
+
+    <!-- 1. Autenticação Admin -->
+    <div class="test-section">
+        <h2>1. 🔐 Verificação de Autenticação Admin</h2>
+        <button onclick="testAdminAuth()">Testar Autenticação</button>
+        <div id="auth-results"></div>
+    </div>
+
+    <!-- 2. Rate Limiting -->
+    <div class="test-section">
+        <h2>2. ⚡ Teste de Rate Limiting</h2>
+        <button onclick="testRateLimit()">Testar Rate Limiting</button>
+        <button onclick="testRateLimitBurst()">Teste de Rajada (10 requisições)</button>
+        <div id="rate-results"></div>
+    </div>
+
+    <!-- 3. Analytics Validation -->
+    <div class="test-section">
+        <h2>3. 📊 Validação de Analytics</h2>
+        <button onclick="testAnalytics()">Verificar Analytics</button>
+        <div id="analytics-results"></div>
+        <div id="analytics-metrics"></div>
+    </div>
+
+    <!-- 4. Template Saving -->
+    <div class="test-section">
+        <h2>4. 💾 Teste de Salvamento de Templates</h2>
+        <button onclick="testTemplateSaving()">Testar Salvamento</button>
+        <button onclick="testFirestorePermissions()">Verificar Permissões Firestore</button>
+        <div id="template-results"></div>
+    </div>
+
+    <!-- 5. Resource Management -->
+    <div class="test-section">
+        <h2>5. 🏗️ Resource Management</h2>
+        <button onclick="testResourceManagement()">Testar Resource Usage</button>
+        <button onclick="testResourceViolations()">Testar Violations</button>
+        <div id="resource-results"></div>
+    </div>
+
+    <!-- Console de Logs -->
+    <div class="test-section">
+        <h2>📋 Console de Logs</h2>
+        <button onclick="clearLogs()">Limpar Logs</button>
+        <div id="logs"></div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js';
+
+        // Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyBjCvMk-Esc4mOXNLU9Vw8IelYXGnggZ-o",
+            authDomain: "agendiia-fire11.firebaseapp.com",
+            projectId: "agendiia-fire11",
+            storageBucket: "agendiia-fire11.firebasestorage.app",
+            messagingSenderId: "82237664365",
+            appId: "1:82237664365:web:bca92b7a6e5a8d2d0bc29a"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const functions = getFunctions(app);
+
+        // Global variables for tests
+        window.auth = auth;
+        window.db = db;
+        window.functions = functions;
+        window.currentUser = null;
+
+        // Logs utility
+        window.log = function(message, type = 'info') {
+            const logsDiv = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${type.toUpperCase()}: ${message}\n`;
+            logsDiv.textContent += logEntry;
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+            console.log(message);
+        };
+
+        window.clearLogs = function() {
+            document.getElementById('logs').textContent = '';
+        };
+
+        // Auth state listener
+        onAuthStateChanged(auth, (user) => {
+            window.currentUser = user;
+            if (user) {
+                log(`Usuário autenticado: ${user.email}`, 'success');
+            } else {
+                log('Usuário não autenticado', 'warning');
+            }
+        });
+
+        // Test functions
+        window.testAdminAuth = async function() {
+            const resultsDiv = document.getElementById('auth-results');
+            resultsDiv.innerHTML = '<div class="info">Testando autenticação admin...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    // Try to sign in with admin credentials
+                    log('Tentando fazer login como admin...', 'info');
+                    const email = prompt('Email do admin:') || 'admin@agendiia.com.br';
+                    const password = prompt('Senha:') || 'admin123';
+                    
+                    await signInWithEmailAndPassword(auth, email, password);
+                    log('Login realizado com sucesso', 'success');
+                }
+
+                // Check admin permissions
+                log('Verificando permissões de admin...', 'info');
+                
+                // Test 1: Check Firestore admin emails
+                const settingsRef = doc(db, 'platform', 'settings');
+                const settingsSnap = await getDoc(settingsRef);
+                
+                let adminEmails = [];
+                if (settingsSnap.exists()) {
+                    const data = settingsSnap.data();
+                    adminEmails = data.adminEmails || [];
+                    log(`Admin emails encontrados: ${adminEmails.join(', ')}`, 'info');
+                } else {
+                    log('Documento platform/settings não existe', 'warning');
+                }
+
+                // Test 2: Try calling admin function
+                try {
+                    const listUsers = httpsCallable(functions, 'listPlatformUsers');
+                    const result = await listUsers();
+                    log(`Função admin executada com sucesso. Usuários: ${result.data?.length || 0}`, 'success');
+                    
+                    resultsDiv.innerHTML = `
+                        <div class="success">✅ Autenticação Admin OK</div>
+                        <div class="info">Email: ${window.currentUser.email}</div>
+                        <div class="info">Admin emails: ${adminEmails.join(', ')}</div>
+                        <div class="info">Usuários na plataforma: ${result.data?.length || 0}</div>
+                    `;
+                } catch (funcError) {
+                    log(`Erro ao chamar função admin: ${funcError.message}`, 'error');
+                    resultsDiv.innerHTML = `
+                        <div class="error">❌ Função admin falhou: ${funcError.message}</div>
+                        <div class="warning">Usuário pode não ter permissões administrativas</div>
+                    `;
+                }
+
+            } catch (error) {
+                log(`Erro na autenticação: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        window.testRateLimit = async function() {
+            const resultsDiv = document.getElementById('rate-results');
+            resultsDiv.innerHTML = '<div class="info">Testando rate limiting...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Testando rate limiting com função admin...', 'info');
+                
+                const startTime = Date.now();
+                let successCount = 0;
+                let errorCount = 0;
+                
+                // Test with a safe admin function
+                const getRateLimitStats = httpsCallable(functions, 'getRateLimitStats');
+                
+                for (let i = 0; i < 5; i++) {
+                    try {
+                        const result = await getRateLimitStats();
+                        successCount++;
+                        log(`Requisição ${i + 1}: Sucesso`, 'success');
+                    } catch (error) {
+                        errorCount++;
+                        log(`Requisição ${i + 1}: ${error.message}`, 'error');
+                    }
+                    
+                    // Small delay between requests
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+                
+                resultsDiv.innerHTML = `
+                    <div class="success">✅ Teste de Rate Limiting Concluído</div>
+                    <div class="info">Sucessos: ${successCount}/5</div>
+                    <div class="info">Erros: ${errorCount}/5</div>
+                    <div class="info">Duração: ${duration}ms</div>
+                    ${errorCount > 0 ? '<div class="success">✅ Rate limiting funcionando</div>' : '<div class="warning">⚠️ Nenhum rate limit atingido</div>'}
+                `;
+                
+            } catch (error) {
+                log(`Erro no teste de rate limit: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        window.testRateLimitBurst = async function() {
+            const resultsDiv = document.getElementById('rate-results');
+            resultsDiv.innerHTML = '<div class="info">Testando rajada de requisições...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Enviando 10 requisições simultâneas...', 'info');
+                
+                const getRateLimitStats = httpsCallable(functions, 'getRateLimitStats');
+                const promises = [];
+                
+                const startTime = Date.now();
+                
+                for (let i = 0; i < 10; i++) {
+                    promises.push(
+                        getRateLimitStats().then(
+                            () => ({ success: true, index: i }),
+                            (error) => ({ success: false, index: i, error: error.message })
+                        )
+                    );
+                }
+                
+                const results = await Promise.all(promises);
+                const endTime = Date.now();
+                
+                const successCount = results.filter(r => r.success).length;
+                const errorCount = results.filter(r => !r.success).length;
+                
+                log(`Resultados: ${successCount} sucessos, ${errorCount} erros`, 'info');
+                
+                resultsDiv.innerHTML = `
+                    <div class="success">✅ Teste de Rajada Concluído</div>
+                    <div class="info">Sucessos: ${successCount}/10</div>
+                    <div class="info">Erros (rate limited): ${errorCount}/10</div>
+                    <div class="info">Duração: ${endTime - startTime}ms</div>
+                    ${errorCount > 5 ? '<div class="success">✅ Rate limiting robusto</div>' : '<div class="warning">⚠️ Rate limiting pode precisar de ajustes</div>'}
+                `;
+                
+            } catch (error) {
+                log(`Erro no teste de rajada: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        window.testAnalytics = async function() {
+            const resultsDiv = document.getElementById('analytics-results');
+            const metricsDiv = document.getElementById('analytics-metrics');
+            resultsDiv.innerHTML = '<div class="info">Testando analytics...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Carregando analytics da plataforma...', 'info');
+                
+                const getPlatformAnalytics = httpsCallable(functions, 'getPlatformAnalytics');
+                const result = await getPlatformAnalytics({ period: '30d' });
+                
+                const data = result.data;
+                log('Analytics carregados com sucesso', 'success');
+                
+                // Check if data looks realistic
+                const isRealData = data.platformMetrics.totalUsers > 0 && 
+                                 data.revenueMetrics.total > 0;
+                
+                resultsDiv.innerHTML = `
+                    <div class="success">✅ Analytics carregados com sucesso</div>
+                    <div class="${isRealData ? 'success' : 'warning'}">
+                        ${isRealData ? '✅ Dados parecem reais' : '⚠️ Dados podem ser simulados'}
+                    </div>
+                `;
+                
+                // Display metrics
+                metricsDiv.innerHTML = `
+                    <div class="metric">
+                        <div class="metric-value">${data.platformMetrics.totalUsers}</div>
+                        <div class="metric-label">Total Usuários</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${data.platformMetrics.activeUsers}</div>
+                        <div class="metric-label">Usuários Ativos</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">R$ ${data.platformMetrics.totalRevenue.toFixed(2)}</div>
+                        <div class="metric-label">Receita Total</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${data.platformMetrics.totalAppointments}</div>
+                        <div class="metric-label">Agendamentos</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${data.conversionMetrics.trialToSubscription}%</div>
+                        <div class="metric-label">Conversão Trial</div>
+                    </div>
+                `;
+                
+            } catch (error) {
+                log(`Erro ao carregar analytics: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        window.testTemplateSaving = async function() {
+            const resultsDiv = document.getElementById('template-results');
+            resultsDiv.innerHTML = '<div class="info">Testando salvamento de templates...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Testando salvamento de template...', 'info');
+                
+                const testTemplate = {
+                    id: 'test_template',
+                    event: 'Teste',
+                    subject: 'Template de Teste',
+                    body: 'Este é um template de teste criado em ' + new Date().toISOString()
+                };
+                
+                const docRef = doc(db, 'platform', 'automations');
+                
+                // Try to save
+                await setDoc(docRef, {
+                    templates: [testTemplate],
+                    updatedAt: serverTimestamp(),
+                    testSave: true
+                }, { merge: true });
+                
+                log('Template salvo com sucesso', 'success');
+                
+                // Try to read back
+                const savedDoc = await getDoc(docRef);
+                if (savedDoc.exists() && savedDoc.data().testSave) {
+                    log('Template verificado com sucesso', 'success');
+                    resultsDiv.innerHTML = `
+                        <div class="success">✅ Salvamento de Templates OK</div>
+                        <div class="info">Documento salvo e verificado</div>
+                    `;
+                } else {
+                    log('Erro ao verificar template salvo', 'error');
+                    resultsDiv.innerHTML = `
+                        <div class="error">❌ Erro na verificação</div>
+                    `;
+                }
+                
+            } catch (error) {
+                log(`Erro ao salvar template: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `
+                    <div class="error">❌ Erro: ${error.message}</div>
+                    <div class="warning">Verifique as regras do Firestore</div>
+                `;
+            }
+        };
+
+        window.testFirestorePermissions = async function() {
+            const resultsDiv = document.getElementById('template-results');
+            resultsDiv.innerHTML = '<div class="info">Testando permissões Firestore...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Testando permissões em várias coleções...', 'info');
+                
+                const tests = [
+                    { path: 'platform/settings', name: 'Platform Settings' },
+                    { path: 'platform/automations', name: 'Automations' },
+                    { path: 'platform/brevo', name: 'Brevo Settings' },
+                    { path: 'platform_settings/test', name: 'Legacy Settings' }
+                ];
+                
+                const results = [];
+                
+                for (const test of tests) {
+                    try {
+                        const docRef = doc(db, test.path);
+                        
+                        // Test read
+                        const readDoc = await getDoc(docRef);
+                        const canRead = true;
+                        
+                        // Test write
+                        await setDoc(docRef, {
+                            testWrite: Date.now(),
+                            testUser: window.currentUser.uid
+                        }, { merge: true });
+                        const canWrite = true;
+                        
+                        results.push({
+                            name: test.name,
+                            read: canRead,
+                            write: canWrite,
+                            status: 'success'
+                        });
+                        
+                        log(`${test.name}: READ ✅ WRITE ✅`, 'success');
+                        
+                    } catch (error) {
+                        results.push({
+                            name: test.name,
+                            read: false,
+                            write: false,
+                            status: 'error',
+                            error: error.message
+                        });
+                        
+                        log(`${test.name}: ERRO - ${error.message}`, 'error');
+                    }
+                }
+                
+                const successCount = results.filter(r => r.status === 'success').length;
+                const totalTests = results.length;
+                
+                resultsDiv.innerHTML = `
+                    <div class="${successCount === totalTests ? 'success' : 'warning'}">
+                        ${successCount === totalTests ? '✅' : '⚠️'} Permissões: ${successCount}/${totalTests} OK
+                    </div>
+                    ${results.map(r => `
+                        <div class="${r.status === 'success' ? 'info' : 'error'}">
+                            ${r.name}: ${r.read ? 'READ ✅' : 'READ ❌'} ${r.write ? 'WRITE ✅' : 'WRITE ❌'}
+                            ${r.error ? `<br>Erro: ${r.error}` : ''}
+                        </div>
+                    `).join('')}
+                `;
+                
+            } catch (error) {
+                log(`Erro no teste de permissões: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        window.testResourceManagement = async function() {
+            const resultsDiv = document.getElementById('resource-results');
+            resultsDiv.innerHTML = '<div class="info">Testando Resource Management...</div>';
+            
+            try {
+                if (!window.currentUser) {
+                    resultsDiv.innerHTML = '<div class="error">❌ Faça login primeiro</div>';
+                    return;
+                }
+
+                log('Testando funções de Resource Management...', 'info');
+                
+                const functions = [
+                    'getResourceUsage',
+                    'getResourceViolations', 
+                    'getExternalServiceUsage',
+                    'getCostAlerts',
+                    'getRateLimitStats'
+                ];
+                
+                const results = [];
+                
+                for (const funcName of functions) {
+                    try {
+                        const callable = httpsCallable(window.functions, funcName);
+                        const result = await callable();
+                        
+                        results.push({
+                            name: funcName,
+                            status: 'success',
+                            dataLength: Array.isArray(result.data) ? result.data.length : 'N/A'
+                        });
+                        
+                        log(`${funcName}: ✅ (${Array.isArray(result.data) ? result.data.length + ' items' : 'OK'})`, 'success');
+                        
+                    } catch (error) {
+                        results.push({
+                            name: funcName,
+                            status: 'error',
+                            error: error.message
+                        });
+                        
+                        log(`${funcName}: ❌ ${error.message}`, 'error');
+                    }
+                }
+                
+                const successCount = results.filter(r => r.status === 'success').length;
+                const totalTests = results.length;
+                
+                resultsDiv.innerHTML = `
+                    <div class="${successCount === totalTests ? 'success' : 'warning'}">
+                        ${successCount === totalTests ? '✅' : '⚠️'} Resource Functions: ${successCount}/${totalTests} OK
+                    </div>
+                    ${results.map(r => `
+                        <div class="${r.status === 'success' ? 'info' : 'error'}">
+                            ${r.name}: ${r.status === 'success' ? '✅' : '❌'}
+                            ${r.dataLength !== undefined ? ` (${r.dataLength} items)` : ''}
+                            ${r.error ? `<br>Erro: ${r.error}` : ''}
+                        </div>
+                    `).join('')}
+                `;
+                
+            } catch (error) {
+                log(`Erro no teste de Resource Management: ${error.message}`, 'error');
+                resultsDiv.innerHTML = `<div class="error">❌ Erro: ${error.message}</div>`;
+            }
+        };
+
+        // Initialize
+        log('Diagnóstico de Admin inicializado', 'info');
+        log('Aguardando autenticação...', 'info');
+    </script>
+</body>
+</html>
