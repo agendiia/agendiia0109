@@ -53,11 +53,11 @@ html, body, #root { height: 100%; }
   }
   
   .dark\:text-gray-100, .dark\:text-gray-300, .text-gray-600 {
-    color: #374151 !important; /* Secondary text - darker gray-700 */
+    color: #1c2129 !important; /* Secondary text - darker gray-700 */
   }
 
   .text-gray-500, .dark\:text-gray-400 {
-    color: #4B5563 !important; /* Muted text - darker gray-600 */
+    color: #0c0e11 !important; /* Muted text - darker gray-600 */
   }
 
   /* Border hierarchy */
@@ -99,5 +99,50 @@ html, body, #root { height: 100%; }
   /* Ensure proper spacing and readability */
   .space-y-6 > * + *, .space-y-4 > * + * {
     margin-top: 1rem !important;
+  }
+
+  /* Enhanced text contrast for interactive modals and forms */
+  /* Modals, forms, and interactive sections */
+  .fixed .bg-white label,
+  .fixed .bg-white input,
+  .fixed .bg-white textarea,
+  .fixed .bg-white select,
+  .fixed .bg-white p,
+  .fixed .bg-white span,
+  .fixed .bg-white div,
+  [role="dialog"] label,
+  [role="dialog"] input,
+  [role="dialog"] textarea,
+  [role="dialog"] select,
+  [role="dialog"] p,
+  [role="dialog"] span,
+  [role="dialog"] div,
+  .modal label,
+  .modal input,
+  .modal textarea,
+  .modal select,
+  .modal p,
+  .modal span,
+  .modal div {
+    color: #1c2129 !important;
+  }
+
+  /* Form elements and interactive content */
+  .bg-white label,
+  .bg-white .text-sm,
+  .bg-white .text-xs,
+  .bg-white input::placeholder,
+  .bg-white textarea::placeholder {
+    color: #1c2129 !important;
+  }
+
+  /* Specific targeting for edit/risk analysis/communication sections */
+  .space-y-4 label,
+  .space-y-6 label,
+  .grid label,
+  .flex label,
+  .form-group label,
+  .input-group label {
+    color: #1c2129 !important;
   }
 }
