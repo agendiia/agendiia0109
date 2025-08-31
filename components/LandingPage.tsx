@@ -104,12 +104,15 @@ const Testimonial: React.FC<{ quote: string; author: string }> = ({ quote, autho
 );
 
 const PricingCard: React.FC<{ name: string; price: string; features: string[]; ctaHref: string; best?: boolean }> = ({ name, price, features, ctaHref, best }) => (
-  <motion.div className={`rounded-2xl p-6 border shadow-sm ${best ? 'border-theme ring-2 ring-theme-light' : 'border-gray-200 dark:border-gray-700'} bg-white dark:bg-gray-800 flex flex-col`}
+  <motion.div className={`relative rounded-2xl p-6 border shadow-sm ${best ? 'border-theme ring-2 ring-theme-light' : 'border-gray-200 dark:border-gray-700'} bg-white dark:bg-gray-800 flex flex-col`}
     initial={{ opacity: 0, y: 12 }}
     whileInView={{ opacity: 1, y: 0 }}
     viewport={{ once: true, amount: 0.15 }}
     transition={{ duration: 0.45 }}
   >
+    {best ? (
+      <span className="absolute -top-3 right-3 bg-indigo-600 text-white text-xs font-semibold px-3 py-1 rounded-full shadow">Recomendado</span>
+    ) : null}
     <h3 className="text-xl font-bold text-gray-900 dark:text-white">{name}</h3>
     <p className="mt-2 text-3xl font-extrabold text-gray-900 dark:text-white">{price}<span className="text-base font-medium text-gray-500">/mês</span></p>
     <ul className="mt-4 space-y-2 text-sm text-gray-600 dark:text-gray-300">

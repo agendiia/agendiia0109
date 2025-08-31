@@ -698,6 +698,7 @@ const PlanSelection: React.FC<{ subscription: SubscriptionData | null, onSelectP
                         isCurrent={subscription?.planId === key}
                         isUpgrade={subscription?.planId === 'professional' && key === 'advanced'}
                         isDowngrade={subscription?.planId === 'advanced' && key === 'professional'}
+                        recommended={key === 'advanced'}
                         onSelect={() => onSelectPlan(key)}
                     />
                 ))}
@@ -706,9 +707,10 @@ const PlanSelection: React.FC<{ subscription: SubscriptionData | null, onSelectP
     )
 }
 
-const PlanCard: React.FC<{ plan: typeof plans[PlanKey], isCurrent: boolean, isUpgrade: boolean, isDowngrade?: boolean, onSelect: () => void }> = ({ plan, isCurrent, isUpgrade, isDowngrade, onSelect }) => {
+const PlanCard: React.FC<{ plan: typeof plans[PlanKey], isCurrent: boolean, isUpgrade: boolean, isDowngrade?: boolean, recommended?: boolean, onSelect: () => void }> = ({ plan, isCurrent, isUpgrade, isDowngrade, recommended, onSelect }) => {
     return (
-        <div className={`p-6 rounded-lg border-2 ${isCurrent ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
+        <div className={`relative p-6 rounded-lg border-2 ${isCurrent ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
+            {recommended ? <span className="absolute -top-3 right-3 bg-indigo-600 text-white text-xs font-semibold px-3 py-1 rounded-full shadow">Recomendado</span> : null}
             <h3 className="text-xl font-bold text-indigo-600 dark:text-indigo-400">{plan.name}</h3>
             <p className="text-3xl font-extrabold my-2">R$ {plan.price.toFixed(2)}<span className="text-base font-medium text-gray-500">/mês</span></p>
             <ul className="space-y-2 my-6 text-sm">
