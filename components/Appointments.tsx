@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Appointment, AppointmentStatus, Client, Service, ClientCategory, BrevoSettings } from '../types';
-import { parseScheduleRequest, analyzeNoShowRisk, generateAppointmentCommunication } from '../services/geminiService';
+import { analyzeNoShowRisk, generateAppointmentCommunication } from '../services/geminiService';
 import { getBrevoConnectionStatus, sendEmail, sendWhatsApp } from '../services/brevoService';
 import { doc as fsDoc, getDoc as fsGetDoc } from 'firebase/firestore';
-import { Calendar, Tag, User, Clock, DollarSign, MoreVertical, Plus, Edit, Trash, List, X, Search, CheckSquare, ArrowLeft, ArrowRight, Sparkles, Loader, Brain, MessageCircle, Copy, Check, Send, AlertTriangle } from './Icons';
+import { Calendar, Tag, User, Clock, DollarSign, MoreVertical, Plus, Edit, Trash, List, X, Search, CheckSquare, ArrowLeft, ArrowRight, Loader, Brain, MessageCircle, Copy, Check, Send, AlertTriangle } from './Icons';
 import { db } from '@/services/firebase';
 import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, orderBy, query, serverTimestamp, Timestamp, updateDoc, writeBatch, where, arrayUnion } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
@@ -66,14 +66,12 @@ const Appointments: React.FC = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [isBatchOperationRunning, setIsBatchOperationRunning] = useState(false);
 
-    // AI Feature States
-  const [quickScheduleText, setQuickScheduleText] = useState('');
-  const [isQuickScheduleLoading, setIsQuickScheduleLoading] = useState(false);
-  const [selectedApptForComm, setSelectedApptForComm] = useState<Appointment | null>(null);
+        // AI Feature States
+        const [selectedApptForComm, setSelectedApptForComm] = useState<Appointment | null>(null);
   const [isCommModalOpen, setIsCommModalOpen] = useState(false);
   type RiskAnalysis = { risk: 'Baixo' | 'Médio' | 'Alto'; justification: string; isLoading: boolean };
   const [riskAnalyses, setRiskAnalyses] = useState<Map<string, RiskAnalysis>>(new Map());
-  const [error, setError] = useState('');
+    const [error, setError] = useState('');
 
     // Load data from Firestore
     useEffect(() => {
@@ -465,38 +463,7 @@ const Appointments: React.FC = () => {
     };
 
   // --- AI Feature Handlers ---
-    const handleQuickSchedule = async () => {
-      if (!quickScheduleText.trim()) return;
-      setIsQuickScheduleLoading(true);
-      setError('');
-      try {
-          const resultString = await parseScheduleRequest(quickScheduleText);
-          const result = JSON.parse(resultString);
-
-                    const client = clients.find(c => c.name?.toLowerCase?.() === result.clientName?.toLowerCase());
-                    const service = services.find(s => s.name?.toLowerCase?.() === result.serviceName?.toLowerCase());
-
-          const partialAppointment: Appointment = {
-              id: '',
-              clientName: client?.name || result.clientName || '',
-              service: service?.name || result.serviceName || '',
-              dateTime: result.dateTime ? new Date(result.dateTime) : new Date(),
-              duration: service?.duration || 0,
-              status: AppointmentStatus.Scheduled,
-              modality: service?.modality || 'Online',
-              price: service?.price || 0,
-          };
-          
-          handleOpenModal(partialAppointment);
-          setQuickScheduleText('');
-
-      } catch (e) {
-          console.error("Error parsing schedule request:", e);
-          setError("Não foi possível entender o agendamento. Tente ser mais específico, por exemplo: 'Agendar [Nome do Cliente] para [Nome do Serviço] amanhã às 10h'.");
-      } finally {
-          setIsQuickScheduleLoading(false);
-      }
-  };
+    // Quick scheduling feature removed
   
   const handleAnalyzeRisk = async (appointment: Appointment) => {
     const client = clients.find(c => c.name === appointment.clientName);
@@ -577,31 +544,7 @@ const Appointments: React.FC = () => {
                     </div>
         </div>
 
-    <div className="bg-indigo-50 dark:bg-gray-900/50 p-4 rounded-xl border-2 border-dashed border-indigo-200 dark:border-indigo-800/50 space-y-3">
-            <h3 className="font-semibold text-gray-800 dark:text-white flex items-center">
-                <Sparkles className="h-5 w-5 mr-2 text-indigo-500" />
-                Agendamento Rápido com IA
-            </h3>
-            <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                    type="text"
-                    value={quickScheduleText}
-                    onChange={(e) => setQuickScheduleText(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleQuickSchedule()}
-                    placeholder="Ex: Agendar Ana Clara para Sessão de Terapia amanhã às 15h"
-                    className="flex-grow p-2 rounded-lg bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500"
-                />
-                <button
-                    onClick={handleQuickSchedule}
-                    disabled={isQuickScheduleLoading}
-                    className="bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-indigo-700 flex items-center justify-center space-x-2 disabled:bg-indigo-400 disabled:cursor-not-allowed"
-                >
-                    {isQuickScheduleLoading ? <Loader className="h-5 w-5 animate-spin"/> : <Plus />}
-                    <span>Agendar</span>
-                </button>
-            </div>
-            {error && <p className="text-xs text-red-500">{error}</p>}
-        </div>
+    {/* Quick AI scheduling removed */}
 
       <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-md space-y-4">
         

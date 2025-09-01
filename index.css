@@ -33,7 +33,7 @@ html, body, #root { height: 100%; }
   /* Global page background - soft light gray */
   html, body, #root {
     background-color: #F8FAFC !important; /* tailwind gray-50 */
-    color: #374151 !important; /* tailwind gray-700 */
+    color: #181e27 !important; /* tailwind gray-700 */
   }
 
   /* Card/panel backgrounds - clean white with subtle shadow */
@@ -60,13 +60,13 @@ html, body, #root { height: 100%; }
   ::placeholder,
   input::placeholder,
   textarea::placeholder {
-    color: #4B5563 !important; /* gray-600 */
+    color: #101316 !important; /* gray-600 */
     opacity: 1 !important; /* Firefox default is 0.54 */
   }
 
   /* Make icons darker */
   .text-gray-400, .dark\:text-gray-500 {
-    color: #374151 !important; /* gray-700 */
+    color: #1a1f27 !important; /* gray-700 */
   }
 
   /* Border hierarchy */
