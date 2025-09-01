@@ -1389,6 +1389,7 @@ const ConfirmBooking: React.FC<{
                 if (!professionalId) throw new Error('ID do profissional não encontrado para o Mercado Pago.');
                 // Two-stage: create appointment first (confirm)
                 const appointmentId = await createAppointment();
+                try { onFinish && onFinish(selectedGatewayObj?.id || null); } catch {}
                 try { onConfirm && onConfirm(); } catch {}
                 // Attempt to create MercadoPago preference immediately so the payment page can redirect faster
                 try {
@@ -1562,6 +1563,7 @@ const BookingSuccess: React.FC<{onBookAnother: () => void, lastSelectedGateway?:
     };
 
     const showWhatsApp = lastSelectedGateway === 'pix';
+    const showOtherButton = lastSelectedGateway !== 'mercadopago';
 
     return (
         <div className="text-center py-10">
@@ -1575,9 +1577,11 @@ const BookingSuccess: React.FC<{onBookAnother: () => void, lastSelectedGateway?:
                         Enviar comprovante via WhatsApp
                     </a>
                 )}
-                <button onClick={onBookAnother} className="bg-[var(--theme-color)] text-white font-bold py-3 px-6 rounded-lg hover:opacity-90 transition-opacity">
-                    Fazer Outro Agendamento
-                </button>
+                {showOtherButton && (
+                    <button onClick={onBookAnother} className="bg-[var(--theme-color)] text-white font-bold py-3 px-6 rounded-lg hover:opacity-90 transition-opacity">
+                        Fazer Outro Agendamento
+                    </button>
+                )}
             </div>
         </div>
     );

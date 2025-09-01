@@ -272,14 +272,14 @@ const LandingPage: React.FC = () => {
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-8">
           <FeatureCard
             title="Página Pública de Agendamento"
-            desc="Seu link personalizado (/booking/<slug>) para clientes agendarem 24/7."
+            desc="Seu link personalizado para agendamento de clientes 24/7."
             icon="📅"
             iconClass="bg-emerald-100 text-emerald-600"
             cardClass="bg-emerald-50 text-emerald-900 border-emerald-100 dark:bg-emerald-900 dark:text-emerald-100 dark:border-emerald-800"
           />
           <FeatureCard
             title="Perfil Profissional"
-            desc="Bio, especialidade, redes sociais, fotos e depoimentos aprovados."
+            desc="Personalize o seu perfil profissional, redes sociais, fotos e depoimentos e muito mais."
             icon="👤"
             iconClass="bg-indigo-100 text-indigo-600"
             cardClass="bg-indigo-50 text-indigo-900 border-indigo-100 dark:bg-indigo-900 dark:text-indigo-100 dark:border-indigo-800"
@@ -293,21 +293,21 @@ const LandingPage: React.FC = () => {
           />
           <FeatureCard
             title="Pagamentos Integrados"
-            desc="Pix estático e link de checkout por Cartão de Crédito. Status no agendamento."
+            desc="Pix e link de checkout por Cartão de Crédito. Status no agendamento."
             icon="💳"
             iconClass="bg-amber-100 text-amber-700"
             cardClass="bg-amber-50 text-amber-900 border-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-800"
           />
           <FeatureCard
             title="E-mails Automáticos"
-            desc="Confirmação no agendamento e lembrete ~24h antes — via Brevo."
+            desc="Confirmação no agendamento e lembrete ~24h antes e 3 hs antes."
             icon="📧"
             iconClass="bg-pink-100 text-pink-600"
             cardClass="bg-pink-50 text-pink-900 border-pink-100 dark:bg-pink-900 dark:text-pink-100 dark:border-pink-800"
           />
           <FeatureCard
             title="Marketing com IA"
-            desc="Gere biografias, descrições e ideias de conteúdo com Gemini."
+            desc="Gere biografias, roteiros para vídeo, ideias de conteúdo com IA."
             icon="✨"
             iconClass="bg-purple-100 text-purple-600"
             cardClass="bg-purple-50 text-purple-900 border-purple-100 dark:bg-purple-900 dark:text-purple-100 dark:border-purple-800"
@@ -327,8 +327,8 @@ const LandingPage: React.FC = () => {
             cardClass="bg-rose-50 text-rose-900 border-rose-100 dark:bg-rose-900 dark:text-rose-100 dark:border-rose-800"
           />
           <FeatureCard
-            title="Personalização"
-            desc="Cores do tema, banner e avatar — sua marca em primeiro plano."
+            title="Agendamentos e Clientes"
+            desc="Tenha controle sobre seus agendamentos e clientes de modo fácil."
             icon="🎨"
             iconClass="bg-amber-50 text-amber-600"
             cardClass="bg-amber-50 text-amber-900 border-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-800"
@@ -417,11 +417,18 @@ const LandingPage: React.FC = () => {
         <div className="max-w-3xl mx-auto">
           <h2 className="text-3xl font-bold text-center">Perguntas frequentes</h2>
           <div className="mt-8 space-y-5">
-            {[
+            {/*
               {q:'Preciso de cartão de crédito para começar?', a:'Não. Você pode testar por 14 dias sem cartão. Depois do teste, escolha um plano dentro do painel.'},
               {q:'Consigo usar meu próprio domínio?', a:'Sim. Sua página pública funciona no domínio da plataforma e também pode ser apontada para um domínio próprio.'},
-              {q:'Como funcionam os pagamentos?', a:'Você pode receber por Pix estático diretamente e/ou criar um checkout com cartão de crédito. O status aparece no agendamento.'},
-              {q:'A plataforma envia e-mails automáticos?', a:'Sim. Enviamos confirmação no agendamento e lembrete ~24h antes do atendimento (via Brevo).'},
+            */}
+            {[
+              {q:'Como funcionam os pagamentos?', a:'Você pode receber por Pix ou com cartão de crédito. O status aparece no agendamento.'},
+              {q:'A plataforma envia e-mails automáticos?', a:'Sim. Enviamos confirmação no agendamento e lembrete 24h antes e 3 hs antes do atendimento.'},
+              {q:'Posso personalizar minha página de agendamento?', a:'Sim! Você pode personalizar, adicionar sua logo, suas informações de contato, seus horários, suas redes sociais, suas certificações e configurar suasm formas de recebimento.'},
+              {q:'Como meus clientes fazem agendamentos?', a:'Seus clientes acessam sua página pública personalizada, escolhem o serviço, data e horário disponível, preenchem os dados e confirmam o agendamento.'},
+              {q:'Posso gerenciar múltiplos serviços?', a:'Sim. Você pode cadastrar quantos serviços quiser, definir durações diferentes, preços e disponibilidades específicas para cada um.'},
+              {q:'A plataforma funciona no celular?', a:'Perfeitamente! Tanto o painel administrativo quanto a página de agendamentos são totalmente responsivos e otimizados para mobile.'},
+              {q:'Como cancelo ou remarco agendamentos?', a:'Você pode cancelar ou remarcar agendamentos diretamente no painel de forma fácil e intuitiva.'},
             ].map((item, i)=> (
               <div key={i} className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl p-5">
                 <div className="font-semibold text-gray-900 dark:text-white">{item.q}</div>
@@ -436,9 +443,10 @@ const LandingPage: React.FC = () => {
       <Section id="contato" className="py-12">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="text-3xl font-bold">Fale com a gente</h2>
-          <p className="mt-2 text-gray-600 dark:text-gray-300">Tem dúvidas sobre planos, recursos ou migração? Estamos aqui para ajudar.</p>
+          <p className="mt-2 text-gray-600 dark:text-gray-300">Tem dúvidas sobre planos ou recursos? Estamos aqui para ajudar.</p>
           <div className="mt-6 flex flex-wrap gap-3 justify-center">
-            <a href="mailto:suporte@agendiia.com.br" className="px-5 py-3 rounded-lg bg-theme text-white font-semibold hover:opacity-90">Enviar e-mail</a>
+            <a href="mailto:contato@agendiia.com.br" className="px-5 py-3 rounded-lg bg-theme text-white font-semibold hover:opacity-90">Enviar e-mail</a>
+            <a href="https://wa.me/5551981304994" target="_blank" rel="noopener noreferrer" className="px-5 py-3 rounded-lg bg-emerald-500 text-white font-semibold hover:opacity-90">WhatsApp</a>
             <SecondaryLink href="/login?signup=1">Começar grátis</SecondaryLink>
           </div>
         </div>

@@ -9,6 +9,8 @@ const PublicPaymentPage: React.FC = () => {
     const location = window.location;
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+    const [secondsLeft, setSecondsLeft] = useState<number>(3);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search);
@@ -60,7 +62,21 @@ const PublicPaymentPage: React.FC = () => {
                 if (!url) throw new Error('URL de checkout não retornada pelo servidor.');
                 // Persist for possible future quick redirects
                 try { localStorage.setItem(`lastCheckoutUrl:${appointmentId}`, url); } catch (e) {}
-                window.location.href = url;
+
+                // Show user a short redirection message with an alternative link before navigating
+                setCheckoutUrl(url);
+                setLoading(false);
+                // Start countdown then redirect
+                let secs = 3;
+                setSecondsLeft(secs);
+                const interval = setInterval(() => {
+                    secs -= 1;
+                    setSecondsLeft(secs);
+                    if (secs <= 0) {
+                        clearInterval(interval);
+                        window.location.href = url;
+                    }
+                }, 1000);
             } catch (e: any) {
                 console.error('Erro ao criar preferência MercadoPago:', e);
                 setError(e?.message || 'Erro ao iniciar pagamento.');
@@ -74,7 +90,18 @@ const PublicPaymentPage: React.FC = () => {
     if (loading) return (
         <div className="min-h-screen flex items-center justify-center">
             <div className="text-center">
-                <p className="font-semibold">Redirecionando para o pagamento...</p>
+                <svg className="animate-spin h-8 w-8 text-[var(--theme-color)] mx-auto mb-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+                <p className="font-semibold mb-1">Redirecionando para a página de pagamento...</p>
+                <p className="text-sm text-gray-500 mb-2">Você será automaticamente levado ao checkout do Mercado Pago em <strong>{secondsLeft}</strong> segundo{secondsLeft !== 1 ? 's' : ''}.</p>
+                {checkoutUrl && (
+                    <div className="text-sm">
+                        <p className="mb-2">Se o redirecionamento não ocorrer automaticamente, clique no link abaixo para ir ao checkout agora:</p>
+                        <a href={checkoutUrl} target="_blank" rel="noopener noreferrer" className="underline text-[var(--theme-color)]">Abrir checkout do Mercado Pago</a>
+                    </div>
+                )}
             </div>
         </div>
     );

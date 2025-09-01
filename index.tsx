@@ -38,6 +38,26 @@ if (path.startsWith('/admin')) {
         <App />
       </AuthProvider>
     );
+} else if ([
+    '/appointments',
+    '/clients',
+    '/marketing',
+    '/services',
+    '/finance',
+    '/availability',
+    '/profile',
+    '/subscription',
+    '/reports',
+    '/help-center',
+    '/settings',
+    '/dashboard'
+].some(prefix => path.startsWith(prefix))) {
+    // Treat these internal app routes as part of the main App so refresh keeps the AuthProvider mounted
+    componentToRender = (
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    );
 } else if (path.startsWith('/login')) {
     componentToRender = (
       <AuthProvider>

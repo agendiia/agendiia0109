@@ -270,17 +270,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView }) => {
                   {item.isLocked && <Lock className="h-4 w-4 ml-auto text-gray-400" />}
                 </button>
               ))}
-              <div className="border-t border-gray-100 mt-2 pt-2">
-                <button
-                  onClick={() => {
-                    window.location.href = '/admin';
-                    setOpen(false);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                >
-                  Ir para Admin
-                </button>
-              </div>
+              {/* 'Ir para Admin' removed from mobile menu as requested */}
             </nav>
           </div>
         )}

@@ -51,9 +51,9 @@ service cloud.firestore {
     }
 
     // --- OWNER ACCESS ---
-    // Owners can read and write their own data
+    // Owners can write their own data. Public reads are handled above for public booking.
     match /users/{userId}/{documents=**} {
-      allow read, write: if isOwner(userId);
+      allow write: if isOwner(userId);
     }
 
     // --- ADMIN RULES ---
