@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { generateBio, generateContentPlan, generateSocialMediaPost, generateEmailMarketing, generateAdsCopy } from '../services/geminiService';
+import { generateBio, generateContentPlan, generateSocialMediaPost, generateEmailMarketing, generateAdsCopy, generateVideoScript } from '../services/geminiService';
 import { useAuth } from '@/contexts/AuthContext';
 import { doc, onSnapshot, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/services/firebase';
-import { User, Calendar, Hash, Mail, Megaphone, Brain, Loader } from './Icons';
+import { User, Calendar, Hash, Mail, Megaphone, Video, Brain, Loader } from './Icons';
 
 type Tone = 'professional' | 'friendly' | 'playful';
 
@@ -14,13 +14,15 @@ const MarketingAI: React.FC = () => {
   const [skills, setSkills] = useState('');
   const [audience, setAudience] = useState('clientes locais');
   const [tone, setTone] = useState<Tone>('professional');
+  const [formalityLevel, setFormalityLevel] = useState(50); // 0-100: casual to formal
+  const [seriousnessLevel, setSeriousnessLevel] = useState(50); // 0-100: playful to serious
   const [variations, setVariations] = useState(3);
 
   const [results, setResults] = useState<string[]>([]);
   const [expandedResults, setExpandedResults] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'bio'|'plan'|'posts'|'email'|'ads'>('bio');
+  const [activeTab, setActiveTab] = useState<'bio'|'plan'|'posts'|'email'|'ads'|'video'>('bio');
 
   // Content plan state
   const [planGoal, setPlanGoal] = useState('Aumentar alcance e agendamentos');
@@ -51,6 +53,25 @@ const MarketingAI: React.FC = () => {
   const [adsLoading, setAdsLoading] = useState(false);
   const [adsResult, setAdsResult] = useState<any>(null);
 
+  // Video scripts
+  const [videoType, setVideoType] = useState('Reel');
+  const [videoTopic, setVideoTopic] = useState('Dicas de cuidados pós-consulta');
+  const [videoDuration, setVideoDuration] = useState('30');
+  const [videoObjective, setVideoObjective] = useState('Educar e engajar seguidores');
+  const [videoLoading, setVideoLoading] = useState(false);
+  const [videoResult, setVideoResult] = useState<any>(null);
+
+  // Function to generate tone description from sliders
+  const getToneDescription = () => {
+    const formalityDesc = formalityLevel < 30 ? 'casual e descontraído' : 
+                         formalityLevel > 70 ? 'formal e polido' : 'moderadamente profissional';
+    
+    const seriousnessDesc = seriousnessLevel < 30 ? 'divertido e leve' : 
+                           seriousnessLevel > 70 ? 'sério e focado' : 'equilibrado entre profissional e acessível';
+    
+    return `Tom ${formalityDesc}, com abordagem ${seriousnessDesc}`;
+  };
+
   const handleGenerate = async () => {
     setError(null);
     setResults([]);
@@ -60,7 +81,8 @@ const MarketingAI: React.FC = () => {
       name: name || 'Seu Nome',
       specialty: specialty || 'Profissional',
       skills: skills || 'experiência relevante',
-      targetAudience: audience || 'clientes locais'
+      targetAudience: audience || 'clientes locais',
+      customTone: getToneDescription()
     };
 
     try {
@@ -193,7 +215,7 @@ const MarketingAI: React.FC = () => {
     setPostLoading(true);
     setPostResults([]);
     try {
-      const res = await generateSocialMediaPost(postTopic);
+      const res = await generateSocialMediaPost(postTopic, getToneDescription());
       const text = typeof res === 'string' ? res : String(res);
       // Try parse JSON, otherwise split by lines
       try {
@@ -275,7 +297,7 @@ const MarketingAI: React.FC = () => {
     setEmailLoading(true);
     setEmailResult(null);
     try {
-      const res = await generateEmailMarketing(emailObjective, emailTarget, emailOffer);
+      const res = await generateEmailMarketing(emailObjective, emailTarget, emailOffer, getToneDescription());
       const text = typeof res === 'string' ? res : String(res);
       try {
         const parsed = JSON.parse(text);
@@ -311,6 +333,26 @@ const MarketingAI: React.FC = () => {
     }
   };
 
+  const handleGenerateVideo = async () => {
+    setVideoLoading(true);
+    setVideoResult(null);
+    try {
+      const res = await generateVideoScript(videoType, videoTopic, videoDuration, videoObjective);
+      const text = typeof res === 'string' ? res : String(res);
+      try {
+        const parsed = JSON.parse(text);
+        setVideoResult(parsed);
+      } catch {
+        setVideoResult({ raw: text });
+      }
+    } catch (e) {
+      console.error('generateVideoScript error', e);
+      setVideoResult({ raw: 'Erro ao gerar roteiros de vídeo.' });
+    } finally {
+      setVideoLoading(false);
+    }
+  };
+
   // Subscribe to professional profile and prefill inputs
   useEffect(() => {
     if (!user?.uid) return;
@@ -341,6 +383,7 @@ const MarketingAI: React.FC = () => {
     { id: 'bio', label: 'Bio', Icon: User, activeClass: 'bg-indigo-600 text-white', badgeClass: 'bg-indigo-700' },
     { id: 'plan', label: 'Plano de Conteúdo', Icon: Calendar, activeClass: 'bg-emerald-600 text-white', badgeClass: 'bg-emerald-700' },
     { id: 'posts', label: 'Sugestões de Posts', Icon: Hash, activeClass: 'bg-amber-500 text-white', badgeClass: 'bg-amber-600' },
+    { id: 'video', label: 'Roteiros de Vídeo', Icon: Video, activeClass: 'bg-purple-600 text-white', badgeClass: 'bg-purple-700' },
     { id: 'email', label: 'E-mail Marketing', Icon: Mail, activeClass: 'bg-violet-600 text-white', badgeClass: 'bg-violet-700' },
     { id: 'ads', label: 'Anúncios', Icon: Megaphone, activeClass: 'bg-rose-600 text-white', badgeClass: 'bg-rose-700' },
   ];
@@ -350,6 +393,7 @@ const MarketingAI: React.FC = () => {
       case 'bio': return results.length || 0;
       case 'plan': return planItems.length || (planRaw ? 1 : 0);
       case 'posts': return postResults.length || 0;
+      case 'video': return (videoResult && videoResult.scripts && videoResult.scripts.length) ? videoResult.scripts.length : (videoResult ? 1 : 0);
       case 'email': return emailResult ? 1 : 0;
       case 'ads': return (adsResult && adsResult.suggestions && adsResult.suggestions.length) ? adsResult.suggestions.length : (adsResult ? 1 : 0);
       default: return 0;
@@ -402,9 +446,70 @@ const MarketingAI: React.FC = () => {
           <input value={skills} onChange={e => setSkills(e.target.value)} placeholder="Ex: Pilates clínico, reabilitação" className="w-full p-2 mb-3 rounded border bg-gray-50 dark:bg-gray-700" />
 
           <label className="block text-sm text-gray-600 mb-1">Público-alvo</label>
-          <input value={audience} onChange={e => setAudience(e.target.value)} placeholder="Ex: mães ocupadas" className="w-full p-2 mb-3 rounded border bg-gray-50 dark:bg-gray-700" />
+          <input value={audience} onChange={e => setAudience(e.target.value)} placeholder="Ex: mães ocupadas" className="w-full p-2 mb-4 rounded border bg-gray-50 dark:bg-gray-700" />
 
-          <label className="block text-sm text-gray-600 mb-1">Tom</label>
+          {/* Tone Customization Sliders */}
+          <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg border">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">🎨 Personalização de Tom</h3>
+            
+            {/* Formality Slider */}
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <label className="text-xs text-gray-600 dark:text-gray-400">Estilo</label>
+                <span className="text-xs text-gray-500">
+                  {formalityLevel < 30 ? 'Casual' : formalityLevel > 70 ? 'Formal' : 'Equilibrado'}
+                </span>
+              </div>
+              <div className="relative">
+                <input 
+                  type="range" 
+                  min={0} 
+                  max={100} 
+                  value={formalityLevel} 
+                  onChange={e => setFormalityLevel(Number(e.target.value))}
+                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer slider-formality"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>Casual</span>
+                  <span>Formal</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Seriousness Slider */}
+            <div className="mb-2">
+              <div className="flex justify-between items-center mb-2">
+                <label className="text-xs text-gray-600 dark:text-gray-400">Abordagem</label>
+                <span className="text-xs text-gray-500">
+                  {seriousnessLevel < 30 ? 'Divertido' : seriousnessLevel > 70 ? 'Sério' : 'Equilibrado'}
+                </span>
+              </div>
+              <div className="relative">
+                <input 
+                  type="range" 
+                  min={0} 
+                  max={100} 
+                  value={seriousnessLevel} 
+                  onChange={e => setSeriousnessLevel(Number(e.target.value))}
+                  className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer slider-seriousness"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>Divertido</span>
+                  <span>Sério</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Preview of tone */}
+            <div className="mt-3 p-2 bg-white dark:bg-gray-800 rounded border">
+              <div className="text-xs text-gray-500 mb-1">Tom resultante:</div>
+              <div className="text-xs text-gray-700 dark:text-gray-300 font-medium">
+                {getToneDescription()}
+              </div>
+            </div>
+          </div>
+
+          <label className="block text-sm text-gray-600 mb-1">Tom (modo clássico)</label>
           <select value={tone} onChange={e => setTone(e.target.value as Tone)} className="w-full p-2 mb-3 rounded border bg-gray-50 dark:bg-gray-700">
             <option value="professional">Profissional</option>
             <option value="friendly">Amigável</option>
@@ -690,6 +795,143 @@ const MarketingAI: React.FC = () => {
                 </div>
               ) : (
                 <div className="text-sm text-gray-500">Nenhum anúncio gerado ainda.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Video Scripts Generator */}
+          <div className={`${activeTab === 'video' ? '' : 'hidden'} bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700`}>
+            <h3 className="font-semibold mb-3">Gerador de Roteiros para Vídeo</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Tipo de Vídeo</label>
+                <select value={videoType} onChange={e => setVideoType(e.target.value)} className="w-full p-2 rounded border bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100">
+                  <option value="Reel">Reel (Instagram)</option>
+                  <option value="Story">Story</option>
+                  <option value="TikTok">TikTok</option>
+                  <option value="YouTube Shorts">YouTube Shorts</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Duração (segundos)</label>
+                <select value={videoDuration} onChange={e => setVideoDuration(e.target.value)} className="w-full p-2 rounded border bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100">
+                  <option value="15">15 segundos</option>
+                  <option value="30">30 segundos</option>
+                  <option value="60">60 segundos</option>
+                  <option value="90">90 segundos</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Tópico/Tema</label>
+                <input 
+                  value={videoTopic} 
+                  onChange={e => setVideoTopic(e.target.value)} 
+                  placeholder="Ex: Dicas de cuidados pós-consulta, Como se preparar para a consulta..."
+                  className="w-full p-2 rounded border bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100" 
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Objetivo do Vídeo</label>
+                <input 
+                  value={videoObjective} 
+                  onChange={e => setVideoObjective(e.target.value)} 
+                  placeholder="Ex: Educar e engajar, Promover serviço, Aumentar agendamentos..."
+                  className="w-full p-2 rounded border bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100" 
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button 
+                onClick={handleGenerateVideo} 
+                disabled={videoLoading} 
+                className="bg-purple-600 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-purple-700 transition-colors"
+              >
+                {videoLoading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" /> 
+                    Gerando...
+                  </>
+                ) : (
+                  <>
+                    <Video className="w-4 h-4" /> 
+                    Gerar Roteiros
+                  </>
+                )}
+              </button>
+              <button 
+                onClick={() => setVideoResult(null)} 
+                className="px-3 py-2 rounded bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              >
+                Limpar
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {videoResult && videoResult.scripts && Array.isArray(videoResult.scripts) ? (
+                <div className="space-y-4">
+                  {videoResult.scripts.map((script: any, i: number) => (
+                    <div key={i} className="p-4 rounded-lg border bg-gray-50 dark:bg-gray-900/50">
+                      <div className="font-semibold text-purple-600 dark:text-purple-400 mb-2">
+                        🎬 Roteiro {i + 1}: {script.title}
+                      </div>
+                      
+                      <div className="space-y-3 text-sm">
+                        <div>
+                          <span className="font-medium text-green-600 dark:text-green-400">🎯 Hook Inicial (0-3s):</span>
+                          <p className="text-gray-700 dark:text-gray-300 mt-1">{script.hook}</p>
+                        </div>
+                        
+                        <div>
+                          <span className="font-medium text-blue-600 dark:text-blue-400">📝 Desenvolvimento:</span>
+                          <p className="text-gray-700 dark:text-gray-300 mt-1">{script.development}</p>
+                        </div>
+                        
+                        <div>
+                          <span className="font-medium text-orange-600 dark:text-orange-400">📞 Call-to-Action:</span>
+                          <p className="text-gray-700 dark:text-gray-300 mt-1">{script.cta}</p>
+                        </div>
+                        
+                        <div>
+                          <span className="font-medium text-purple-600 dark:text-purple-400">🎥 Sugestões Visuais:</span>
+                          <p className="text-gray-700 dark:text-gray-300 mt-1">{script.visualSuggestions}</p>
+                        </div>
+                        
+                        <div>
+                          <span className="font-medium text-indigo-600 dark:text-indigo-400">📱 Texto na Tela:</span>
+                          <p className="text-gray-700 dark:text-gray-300 mt-1">{script.textOverlay}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : videoResult ? (
+                <div className="p-3 rounded border bg-gray-50 dark:bg-gray-900/50">
+                  <div className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">
+                    {typeof videoResult === 'string' ? (
+                      videoResult.length > 800 && !expandedResults[400] ? (
+                        <>
+                          {videoResult.slice(0,700)}... 
+                          <button onClick={() => toggleExpanded(400)} className="text-xs text-purple-600 ml-1">
+                            Mostrar mais
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {videoResult}
+                          {videoResult.length > 800 && (
+                            <button onClick={() => toggleExpanded(400)} className="block mt-2 text-xs text-purple-600">
+                              Mostrar menos
+                            </button>
+                          )}
+                        </>
+                      )
+                    ) : (
+                      JSON.stringify(videoResult, null, 2)
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">Nenhum roteiro gerado ainda.</div>
               )}
             </div>
           </div>
