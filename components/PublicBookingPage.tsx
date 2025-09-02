@@ -550,87 +550,91 @@ const PublicBookingPage: React.FC = () => {
     const canDisplayUrl = (candidate?: string | null) => isValidHttpUrl(candidate) || isDataUrl(candidate);
 
     return (
-        <div className="bg-gray-50 dark:bg-gray-900 min-h-screen font-sans text-gray-800 dark:text-gray-200">
-             {/* Style tag to inject the theme color as a CSS variable */}
-            <style>{`:root { --theme-color: ${themeColor}; }`}</style>
-            
-            <header 
-                className="h-64 bg-gray-200 dark:bg-gray-700 bg-cover bg-center relative"
-                style={canDisplayUrl(profile.bannerUrl) ? { backgroundImage: `url(${profile.bannerUrl})` } : undefined}
-            >
-                <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
-            </header>
-            
-            <main className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8 -mt-32">
-                {/* Coluna da Esquerda (Info do Profissional e Resumo) */}
-                <div className="lg:col-span-1 space-y-6">
-                    <div className="sticky top-4 space-y-6">
-                        {/* Card Principal do Perfil (visually modernized) */}
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 text-center ring-1 ring-gray-100 dark:ring-0">
-                            <div className="mx-auto w-fit -mt-16">
-                                <div className="relative">
-                                    <div className="rounded-full p-1" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(59,130,246,0.12))' }}>
-                                        <img
-                                            className="h-32 w-32 rounded-full object-cover border-4 border-white dark:border-gray-800"
-                                            src={canDisplayUrl(profile.avatarUrl) ? (profile.avatarUrl as string) : ('https://api.dicebear.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.name || 'P'))}
-                                            alt="User avatar"
-                                            referrerPolicy="no-referrer"
-                                            onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://api.dicebear.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.name || 'P'); }}
-                                        />
+        <>
+            <title>{profile ? `${profile.name} | Agendiia` : 'Agendamento | Agendiia'}</title>
+            <meta name="description" content={profile ? `Agende seu horário com ${profile.name} - ${profile.specialty}.` : 'Página de agendamento online.'} />
+            <div className="bg-gray-50 dark:bg-gray-900 min-h-screen font-sans text-gray-800 dark:text-gray-200">
+                 {/* Style tag to inject the theme color as a CSS variable */}
+                <style>{`:root { --theme-color: ${themeColor}; }`}</style>
+                
+                <header 
+                    className="h-64 bg-gray-200 dark:bg-gray-700 bg-cover bg-center relative"
+                    style={canDisplayUrl(profile.bannerUrl) ? { backgroundImage: `url(${profile.bannerUrl})` } : undefined}
+                >
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+                </header>
+                
+                <main className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8 -mt-32">
+                    {/* Coluna da Esquerda (Info do Profissional e Resumo) */}
+                    <div className="lg:col-span-1 space-y-6">
+                        <div className="sticky top-4 space-y-6">
+                            {/* Card Principal do Perfil (visually modernized) */}
+                            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 text-center ring-1 ring-gray-100 dark:ring-0">
+                                <div className="mx-auto w-fit -mt-16">
+                                    <div className="relative">
+                                        <div className="rounded-full p-1" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(59,130,246,0.12))' }}>
+                                            <img
+                                                className="h-32 w-32 rounded-full object-cover border-4 border-white dark:border-gray-800"
+                                                src={canDisplayUrl(profile.avatarUrl) ? (profile.avatarUrl as string) : ('https://api.dicebear.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.name || 'P'))}
+                                                alt="User avatar"
+                                                referrerPolicy="no-referrer"
+                                                onError={(e) => { (e.currentTarget as HTMLImageElement).src = 'https://api.dicebear.com/9.x/initials/svg?seed=' + encodeURIComponent(profile.name || 'P'); }}
+                                            />
+                                        </div>
                                     </div>
                                 </div>
+                                <h1 className="text-2xl font-bold text-gray-900 dark:text-white mt-4">{profile.name}</h1>
+                                <p className="text-md text-[var(--theme-color)] font-semibold">{profile.specialty}</p>
+                                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{profile.registration}</p>
+                                <div className="mt-4">
+                                    <SocialLinks links={profile.socialLinks} />
+                                </div>
                             </div>
-                            <h1 className="text-2xl font-bold text-gray-900 dark:text-white mt-4">{profile.name}</h1>
-                            <p className="text-md text-[var(--theme-color)] font-semibold">{profile.specialty}</p>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{profile.registration}</p>
-                            <div className="mt-4">
-                                <SocialLinks links={profile.socialLinks} />
+
+                            {/* Resumo do Agendamento (agora fixo aqui) */}
+                            <BookingSummary service={selectedService} date={selectedDate} time={selectedTime} onReset={resetFlow} />
+
+                            {/* Card de Informações Adicionais com Accordions */}
+                            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+                                 <Accordion title="Sobre" icon={<User className="h-5 w-5" />}>
+                                    <p className="text-sm">{profile.bio}</p>
+                                </Accordion>
+                                
+                                {profile.credentials && profile.credentials.length > 0 && (
+                                    <Accordion title="Credenciais" icon={<Award className="h-5 w-5" />}>
+                                        <CredentialsSection credentials={profile.credentials} />
+                                    </Accordion>
+                                )}
+
+                                {profile.testimonials && profile.testimonials.filter(t => t.status === 'approved').length > 0 && (
+                                    <Accordion title="Depoimentos" icon={<Quote className="h-5 w-5" />}>
+                                        <TestimonialsSection testimonials={profile.testimonials.filter(t => t.status === 'approved')} />
+                                    </Accordion>
+                                )}
+
+                                {profile.address && (
+                                    <Accordion title="Endereço" icon={<MapPin className="h-5 w-5" />}>
+                                        <AddressSection address={profile.address} />
+                                    </Accordion>
+                                )}
                             </div>
                         </div>
+                    </div>
 
-                        {/* Resumo do Agendamento (agora fixo aqui) */}
-                        <BookingSummary service={selectedService} date={selectedDate} time={selectedTime} onReset={resetFlow} />
-
-                        {/* Card de Informações Adicionais com Accordions */}
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                             <Accordion title="Sobre" icon={<User className="h-5 w-5" />}>
-                                <p className="text-sm">{profile.bio}</p>
-                            </Accordion>
-                            
-                            {profile.credentials && profile.credentials.length > 0 && (
-                                <Accordion title="Credenciais" icon={<Award className="h-5 w-5" />}>
-                                    <CredentialsSection credentials={profile.credentials} />
-                                </Accordion>
-                            )}
-
-                            {profile.testimonials && profile.testimonials.filter(t => t.status === 'approved').length > 0 && (
-                                <Accordion title="Depoimentos" icon={<Quote className="h-5 w-5" />}>
-                                    <TestimonialsSection testimonials={profile.testimonials.filter(t => t.status === 'approved')} />
-                                </Accordion>
-                            )}
-
-                            {profile.address && (
-                                <Accordion title="Endereço" icon={<MapPin className="h-5 w-5" />}>
-                                    <AddressSection address={profile.address} />
-                                </Accordion>
-                            )}
+                    {/* Coluna da Direita (Fluxo de Agendamento) */}
+                    <div className="lg:col-span-2">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 sm:p-8">
+                            <BookingStepper currentStep={step} />
+                            {renderStep()}
                         </div>
                     </div>
-                </div>
+                </main>
 
-                {/* Coluna da Direita (Fluxo de Agendamento) */}
-                <div className="lg:col-span-2">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 sm:p-8">
-                        <BookingStepper currentStep={step} />
-                        {renderStep()}
-                    </div>
-                </div>
-            </main>
-
-            <footer className="text-center p-4 text-sm text-gray-500">
-                Powered by <a href="https://agendiia.com" target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--theme-color)]">Agendiia</a>
-            </footer>
-        </div>
+                <footer className="text-center p-4 text-sm text-gray-500">
+                    Powered by <a href="https://agendiia.com" target="_blank" rel="noopener noreferrer" className="font-semibold text-[var(--theme-color)]">Agendiia</a>
+                </footer>
+            </div>
+        </>
     );
 };
 

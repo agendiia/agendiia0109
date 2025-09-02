@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onRequest } from 'firebase-functions/v2/https';
 import Stripe from 'stripe';
@@ -202,18 +202,27 @@ export const sendBrevoEmail = onCall({ region: 'us-central1' }, async (request) 
 
 // Firestore trigger: send confirmation email when a new appointment is created
 export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointments/{appointmentId}', async (event) => {
+  const { userId, appointmentId } = event.params;
+  console.log(`[onAppointmentCreated] Triggered for appointmentId: ${appointmentId} under userId: ${userId}`);
+
   try {
     const snap = event.data;
-    if (!snap) return;
+    if (!snap) {
+      console.log(`[onAppointmentCreated] No data found for event. Exiting.`);
+      return;
+    }
     const data = snap.data() as any;
+    console.log(`[onAppointmentCreated] Appointment data:`, JSON.stringify(data, null, 2));
+
     const clientEmail: string | undefined = data.clientEmail || data.email;
     const clientName: string = data.clientName || 'Cliente';
-  // Prossegue mesmo sem email do cliente para tentar notificar o profissional
+    console.log(`[onAppointmentCreated] Extracted clientEmail: "${clientEmail}" and clientName: "${clientName}"`);
+
+    // Prossegue mesmo sem email do cliente para tentar notificar o profissional
     const serviceName: string = data.service || 'Atendimento';
     const dt: Date = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
     
     // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
-    const userId = event.params.userId;
     const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
     let professionalName: string | undefined = userProfileSnap.exists ? (userProfileSnap.data() as any)?.name : undefined;
     if (!professionalName) {
@@ -267,12 +276,15 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
   (vars as any)['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
   (vars as any)['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
     if (clientEmail) {
+      console.log(`[onAppointmentCreated] Client email found. Preparing to send confirmation to ${clientEmail}.`);
       const html = applyTemplate(body, vars);
       const subj = applyTemplate(subject, vars);
       const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+      console.log(`[onAppointmentCreated] Email sent to client. Message ID: ${msgId}`);
   // email do cliente enviado
       await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
     } else {
+      console.log(`[onAppointmentCreated] Client email not found. Skipping email to client.`);
       await snap.ref.update({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
     }
 
@@ -332,7 +344,154 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       } catch {}
     }
   } catch (e) {
-    console.warn('onAppointmentCreated email error', e);
+    console.error(`[onAppointmentCreated] Top-level error for appointmentId: ${appointmentId}`, e);
+  }
+});
+
+export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointments/{appointmentId}', async (event) => {
+  const { userId, appointmentId } = event.params;
+  console.log(`[onAppointmentUpdated] Triggered for appointmentId: ${appointmentId} under userId: ${userId}`);
+
+  try {
+    const snap = event.data?.after;
+    if (!snap || !snap.exists) {
+      console.log(`[onAppointmentUpdated] No data found for event or document deleted. Exiting.`);
+      return;
+    }
+    const data = snap.data() as any;
+    console.log(`[onAppointmentUpdated] Appointment data:`, JSON.stringify(data, null, 2));
+
+    const clientEmail: string | undefined = data.clientEmail || data.email;
+    const clientName: string = data.clientName || 'Cliente';
+    console.log(`[onAppointmentUpdated] Extracted clientEmail: "${clientEmail}" and clientName: "${clientName}"`);
+
+    // Prossegue mesmo sem email do cliente para tentar notificar o profissional
+    const serviceName: string = data.service || 'Atendimento';
+    const dt: Date = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
+    
+    // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
+    const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
+    let professionalName: string | undefined = userProfileSnap.exists ? (userProfileSnap.data() as any)?.name : undefined;
+    if (!professionalName) {
+      // Try top-level users/{userId} doc
+      try {
+        const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+        professionalName = userDoc && userDoc.exists ? (userDoc.data() as any)?.name : undefined;
+      } catch (e) {
+        console.warn('onAppointmentUpdated - failed to read users/{userId} for professional name fallback', e);
+      }
+    }
+    if (!professionalName) {
+      // Try Firebase Auth displayName or email
+      try {
+        const authRec = await admin.auth().getUser(userId);
+        professionalName = authRec.displayName || authRec.email || undefined;
+      } catch (e) {
+        // ignore
+      }
+    }
+    professionalName = professionalName || 'Profissional';
+    // Load template
+    const autoSnap = await admin.firestore().doc('platform/automations').get();
+    const defaults = {
+      subject: 'Seu agendamento foi atualizado!',
+      body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi atualizado com sucesso!',
+    };
+    let subject = defaults.subject;
+    let body = defaults.body;
+    if (autoSnap.exists) {
+      const au: any = autoSnap.data();
+      const tmpl = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_sched') : null;
+      if (tmpl?.subject) subject = tmpl.subject;
+      if (tmpl?.body) body = tmpl.body;
+    }
+    const vars = {
+      clientName,
+      professionalName,
+      serviceName,
+      appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      // Compatibilidade com formato antigo
+      dateTime: formatDateTimePtBR(dt),
+      time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+    };
+
+  // Backwards compatibility: also expose Portuguese variable names (some templates stored using these)
+  (vars as any)['nome do cliente'] = clientName;
+  (vars as any)['nome do profissional'] = professionalName;
+  (vars as any)['nome do serviço'] = serviceName;
+  (vars as any)['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  (vars as any)['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    if (clientEmail) {
+      console.log(`[onAppointmentUpdated] Client email found. Preparing to send update notification to ${clientEmail}.`);
+      const html = applyTemplate(body, vars);
+      const subj = applyTemplate(subject, vars);
+      const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+      console.log(`[onAppointmentUpdated] Email sent to client. Message ID: ${msgId}`);
+  // email do cliente enviado
+      await snap.ref.update({ updateEmailStatus: 'sent', updateEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    } else {
+      console.log(`[onAppointmentUpdated] Client email not found. Skipping email to client.`);
+      await snap.ref.update({ updateEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    }
+
+    // Also notify the professional via email (try multiple fallbacks for email)
+    try {
+      const profProfile = userProfileSnap; // já buscado antes
+      let profEmail: string | undefined = profProfile.exists ? (profProfile.data() as any)?.email : undefined;
+      // fallback 1: users/{userId} top-level doc
+      if (!profEmail) {
+        try {
+          const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+          if (userDoc && userDoc.exists) {
+      const tmp = (userDoc.data() as any)?.email;            
+      profEmail = tmp || profEmail;
+          }
+        } catch (e) {
+          console.warn('onAppointmentUpdated - falha ao ler users/{userId} para fallback de email', e);
+        }
+      }
+      // fallback 2: Firebase Auth
+      if (!profEmail) {
+        try {
+          const authRec = await admin.auth().getUser(userId);
+          profEmail = authRec?.email || profEmail;
+        } catch (e) {
+          console.warn('onAppointmentUpdated - falha ao obter auth record para fallback de email', e);
+        }
+      }
+      // fallback 3 (último recurso): se ainda não houver email, não envia
+      if (profEmail) {
+        // Carregar template específico para profissional
+        const autoData: any = autoSnap.exists ? autoSnap.data() : null;
+        const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t: any) => t.id === 't_sched_professional') : null;
+        const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars as Record<string,string>);
+        const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Seu agendamento foi atualizado.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
+        // Garantir que variáveis críticas existam
+        if (!(vars as any).appointmentDate) (vars as any).appointmentDate = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        if (!(vars as any).appointmentTime) (vars as any).appointmentTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+        if (!(vars as any).professionalName) (vars as any).professionalName = professionalName;
+        const profHtml = applyTemplate(profBodyTemplate, vars as Record<string,string>);
+        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubject, profHtml);
+    // email profissional enviado
+        try {
+          await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        } catch (w) {
+          console.warn('onAppointmentUpdated - falha ao registrar status do email do profissional', w);
+        }
+      } else {
+        try {
+          await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Failed to notify professional by email', e);
+      try {
+        await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: (e as any)?.message || String(e), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      } catch {}
+    }
+  } catch (e) {
+    console.error(`[onAppointmentUpdated] Top-level error for appointmentId: ${appointmentId}`, e);
   }
 });
 
@@ -365,7 +524,7 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
       // Load template (once would be better, but keep simple)
       const autoSnap = await db.doc('platform/automations').get();
       let subject = 'Lembrete do seu agendamento';
-      let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {date}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {time}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
+      let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {data}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {horário}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
       if (autoSnap.exists) {
         const au: any = autoSnap.data();
         const tmpl = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_remind') : null;
@@ -1345,7 +1504,6 @@ export const cancelStripeSubscription = onCall({ region: 'us-central1' }, async 
   }
 
 });
-
 
 // Callable: reactivate a subscription that was scheduled to cancel at period end
 export const reactivateStripeSubscription = onCall({ region: 'us-central1' }, async (request) => {
@@ -2390,6 +2548,7 @@ export const getRateLimitStats = onCall(async (request) => {
   const { auth } = request;
   if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
   
+  // Apply admin rate limiting
   await applyRateLimit(auth.uid, 'getRateLimitStats', adminRateLimiter);
   await assertIsPlatformAdmin(auth.uid);
   
@@ -2948,10 +3107,15 @@ export const getContentAnalytics = onCall(async (request) => {
         averageDismissalRate: announcements.length > 0
           ? announcements.reduce((sum, a) => sum + (a.dismissedBy?.length || 0), 0) / announcements.length
           : 0,
-        typeStats: announcements.reduce((acc: any, a) => {
-          acc[a.type] = (acc[a.type] || 0) + 1;
-          return acc;
-        }, {})
+        topPerforming: announcements
+          .filter(a => a.viewCount)
+          .sort((a, b) => b.viewCount - a.viewCount)
+          .slice(0, 5)
+          .map(a => ({
+            id: a.id,
+            title: a.title,
+            views: a.viewCount
+          }))
       }
     };
     

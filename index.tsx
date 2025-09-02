@@ -6,6 +6,7 @@ import App from './App';
 import AdminApp from './AdminApp';
 // Initialize Firebase once on startup
 import './services/firebase';
+import { initGA } from './src/services/analytics';
 import PublicBookingPage from './components/PublicBookingPage';
 import PublicPaymentPage from './components/PublicPaymentPage';
 import TestimonialForm from './components/TestimonialForm';
@@ -13,6 +14,8 @@ import LandingPage from './components/LandingPage';
 import AuthPage from './components/AuthPage';
 import { AuthProvider } from './contexts/AuthContext';
 import ApplyCorsPage from './components/ApplyCorsPage';
+
+initGA();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
