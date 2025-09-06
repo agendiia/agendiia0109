@@ -2,6 +2,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onRequest } from 'firebase-functions/v2/https';
+import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import Stripe from 'stripe';
 import * as admin from 'firebase-admin';
 import { 
@@ -18,6 +19,7 @@ import {
   Announcement
 } from './types';
 import { userRateLimiter, adminRateLimiter, applyRateLimit, checkPlanLimits } from './rateLimiter';
+import { Billing } from '@google-cloud/billing';
 
 admin.initializeApp();
 
@@ -162,38 +164,8 @@ export const sendBrevoEmail = onCall({ region: 'us-central1' }, async (request) 
     throw new HttpsError('invalid-argument', 'Parâmetros obrigatórios ausentes.');
   }
   try {
-    // Load platform-level Brevo settings
-    const cfgSnap = await admin.firestore().doc('platform/brevo').get();
-    const cfg = cfgSnap.exists ? (cfgSnap.data() as any) : null;
-    const apiKey = cfg?.apiKey;
-    const senderEmail = cfg?.senderEmail || 'no-reply@agendiia.app';
-    const senderName = cfg?.senderName || 'Agendiia';
-    if (!apiKey) {
-      throw new HttpsError('failed-precondition', 'Brevo não configurado.');
-    }
-
-    const body = {
-      sender: { email: senderEmail, name: senderName },
-      to: [{ email: toEmail, name: toName || toEmail }],
-      subject,
-      htmlContent: html,
-    } as any;
-
-    const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'api-key': apiKey,
-        'content-type': 'application/json',
-        'accept': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      const t = await resp.text();
-      throw new HttpsError('internal', `Erro Brevo: ${resp.status} - ${t}`);
-    }
-  const json: any = await resp.json();
-  return { messageId: json?.messageId || (Array.isArray(json?.messageIds) ? json.messageIds[0] : null) };
+    const messageId = await sendEmailViaBrevo(toEmail, toName || toEmail, subject, html);
+    return { messageId: messageId || null };
   } catch (err: any) {
     if (err instanceof HttpsError) throw err;
     throw new HttpsError('internal', err?.message || 'Falha ao enviar e-mail');
@@ -207,144 +179,102 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
 
   try {
     const snap = event.data;
-    if (!snap) {
-      console.log(`[onAppointmentCreated] No data found for event. Exiting.`);
+    if (!snap || !snap.exists) {
+      console.log('[onAppointmentCreated] no data, exiting');
       return;
     }
     const data = snap.data() as any;
-    console.log(`[onAppointmentCreated] Appointment data:`, JSON.stringify(data, null, 2));
+
+    // ANTI-LOOP: Check if confirmation emails were already sent
+    if (data.confirmationEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
+      console.log(`[onAppointmentCreated] LOOP PREVENTION: Both confirmation emails already sent, skipping.`);
+      return;
+    }
 
     const clientEmail: string | undefined = data.clientEmail || data.email;
     const clientName: string = data.clientName || 'Cliente';
-    console.log(`[onAppointmentCreated] Extracted clientEmail: "${clientEmail}" and clientName: "${clientName}"`);
-
-    // Prossegue mesmo sem email do cliente para tentar notificar o profissional
     const serviceName: string = data.service || 'Atendimento';
     const dt: Date = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
-    
-    // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
-    const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
-    let professionalName: string | undefined = userProfileSnap.exists ? (userProfileSnap.data() as any)?.name : undefined;
-    if (!professionalName) {
-      // Try top-level users/{userId} doc
-      try {
-        const userDoc = await admin.firestore().doc(`users/${userId}`).get();
-        professionalName = userDoc && userDoc.exists ? (userDoc.data() as any)?.name : undefined;
-      } catch (e) {
-        console.warn('onAppointmentCreated - failed to read users/{userId} for professional name fallback', e);
+
+    // Resolve professional name and email with fallbacks
+    const db = admin.firestore();
+    const profileSnap = await db.doc(`users/${userId}/profile/main`).get().catch(() => null);
+    let professionalName = profileSnap && profileSnap.exists ? (profileSnap.data() as any)?.name : undefined;
+    let profEmail = profileSnap && profileSnap.exists ? (profileSnap.data() as any)?.email : undefined;
+    if (!professionalName || !profEmail) {
+      const userDoc = await db.doc(`users/${userId}`).get().catch(() => null);
+      if (userDoc && userDoc.exists) {
+        const ud = userDoc.data() as any;
+        professionalName = professionalName || ud?.name;
+        profEmail = profEmail || ud?.email;
       }
     }
-    if (!professionalName) {
-      // Try Firebase Auth displayName or email
+    if (!professionalName || !profEmail) {
       try {
         const authRec = await admin.auth().getUser(userId);
-        professionalName = authRec.displayName || authRec.email || undefined;
-      } catch (e) {
-        // ignore
-      }
+        professionalName = professionalName || authRec.displayName || authRec.email;
+        profEmail = profEmail || authRec.email || undefined;
+      } catch {}
     }
     professionalName = professionalName || 'Profissional';
-    // Load template
-    const autoSnap = await admin.firestore().doc('platform/automations').get();
-    const defaults = {
-      subject: 'Seu agendamento foi confirmado!',
-      body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi realizado com sucesso!',
-    };
-    let subject = defaults.subject;
-    let body = defaults.body;
-    if (autoSnap.exists) {
+
+    // Load templates
+    const autoSnap = await db.doc('platform/automations').get().catch(() => null);
+    let clientSubject = 'Seu agendamento foi confirmado!';
+    let clientBody = 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi realizado com sucesso!';
+    let profSubject = `Novo agendamento: {serviceName}`;
+    let profBodyTemplate = `Olá {professionalName},\n\nVocê recebeu um novo agendamento.\nCliente: {clientName}\nServiço: {serviceName}\nData: {appointmentDate} - {appointmentTime}`;
+    if (autoSnap && autoSnap.exists) {
       const au: any = autoSnap.data();
-      const tmpl = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_sched') : null;
-      if (tmpl?.subject) subject = tmpl.subject;
-      if (tmpl?.body) body = tmpl.body;
+      const tClient = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_sched') : null;
+      const tProf = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_sched_professional') : null;
+      if (tClient?.subject) clientSubject = tClient.subject;
+      if (tClient?.body) clientBody = tClient.body;
+      if (tProf?.subject) profSubject = tProf.subject;
+      if (tProf?.body) profBodyTemplate = tProf.body;
     }
-    const vars = {
+
+    const vars: any = {
       clientName,
       professionalName,
       serviceName,
       appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
       appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
-      // Compatibilidade com formato antigo
       dateTime: formatDateTimePtBR(dt),
-      time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
     };
 
-  // Backwards compatibility: also expose Portuguese variable names (some templates stored using these)
-  (vars as any)['nome do cliente'] = clientName;
-  (vars as any)['nome do profissional'] = professionalName;
-  (vars as any)['nome do serviço'] = serviceName;
-  (vars as any)['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-  (vars as any)['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    // Send email to client if available
     if (clientEmail) {
-      console.log(`[onAppointmentCreated] Client email found. Preparing to send confirmation to ${clientEmail}.`);
-      const html = applyTemplate(body, vars);
-      const subj = applyTemplate(subject, vars);
-      const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
-      console.log(`[onAppointmentCreated] Email sent to client. Message ID: ${msgId}`);
-  // email do cliente enviado
-      await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      try {
+        const html = applyTemplate(clientBody, vars);
+        const subj = applyTemplate(clientSubject, vars);
+        const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+        await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      } catch (err: any) {
+        console.warn('onAppointmentCreated: failed to send confirmation email to client', err);
+        try { await snap.ref.set({ confirmationEmailStatus: 'error', confirmationEmailError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      }
     } else {
-      console.log(`[onAppointmentCreated] Client email not found. Skipping email to client.`);
-      await snap.ref.update({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      try { await snap.ref.set({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
     }
 
-    // Also notify the professional via email (try multiple fallbacks for email)
-    try {
-      const profProfile = userProfileSnap; // já buscado antes
-      let profEmail: string | undefined = profProfile.exists ? (profProfile.data() as any)?.email : undefined;
-      // fallback 1: users/{userId} top-level doc
-      if (!profEmail) {
-        try {
-          const userDoc = await admin.firestore().doc(`users/${userId}`).get();
-          if (userDoc && userDoc.exists) {
-      const tmp = (userDoc.data() as any)?.email;            
-      profEmail = tmp || profEmail;
-          }
-        } catch (e) {
-          console.warn('onAppointmentCreated - falha ao ler users/{userId} para fallback de email', e);
-        }
-      }
-      // fallback 2: Firebase Auth
-      if (!profEmail) {
-        try {
-          const authRec = await admin.auth().getUser(userId);
-          profEmail = authRec?.email || profEmail;
-        } catch (e) {
-          console.warn('onAppointmentCreated - falha ao obter auth record para fallback de email', e);
-        }
-      }
-      // fallback 3 (último recurso): se ainda não houver email, não envia
-      if (profEmail) {
-        // Carregar template específico para profissional
-        const autoData: any = autoSnap.exists ? autoSnap.data() : null;
-        const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t: any) => t.id === 't_sched_professional') : null;
-        const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars as Record<string,string>);
-        const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Você recebeu um novo agendamento.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
-        // Garantir que variáveis críticas existam
-        if (!(vars as any).appointmentDate) (vars as any).appointmentDate = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-        if (!(vars as any).appointmentTime) (vars as any).appointmentTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-        if (!(vars as any).professionalName) (vars as any).professionalName = professionalName;
-        const profHtml = applyTemplate(profBodyTemplate, vars as Record<string,string>);
-        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubject, profHtml);
-    // email profissional enviado
-        try {
-          await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        } catch (w) {
-          console.warn('onAppointmentCreated - falha ao registrar status do email do profissional', w);
-        }
-      } else {
-        try {
-          await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        } catch {}
-      }
-    } catch (e) {
-      console.warn('Failed to notify professional by email', e);
+    // Notify professional (best-effort)
+    if (profEmail) {
       try {
-        await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: (e as any)?.message || String(e), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-      } catch {}
+        const profHtml = applyTemplate(profBodyTemplate, vars);
+        const profSubj = applyTemplate(profSubject, vars);
+        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubj, profHtml);
+        try { await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      } catch (err: any) {
+        console.warn('onAppointmentCreated: failed to notify professional', err);
+        try { await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      }
+    } else {
+      try { await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
     }
+
   } catch (e) {
-    console.error(`[onAppointmentCreated] Top-level error for appointmentId: ${appointmentId}`, e);
+    console.error('[onAppointmentCreated] top-level error', e);
   }
 });
 
@@ -360,6 +290,22 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
     }
     const data = snap.data() as any;
     console.log(`[onAppointmentUpdated] Appointment data:`, JSON.stringify(data, null, 2));
+
+    // ANTI-LOOP: Check if this update was caused by our own email status updates
+    const before = event.data?.before?.data() as any;
+    const hasNewEmailStatus = data.updateEmailStatus && (!before || before.updateEmailStatus !== data.updateEmailStatus);
+    const hasNewProfNotificationStatus = data.professionalNotificationStatus && (!before || before.professionalNotificationStatus !== data.professionalNotificationStatus);
+    
+    if (hasNewEmailStatus || hasNewProfNotificationStatus) {
+      console.log(`[onAppointmentUpdated] LOOP PREVENTION: Skipping execution because this update was triggered by email status change.`);
+      return;
+    }
+
+    // Additional check: if both emails were already sent, skip
+    if (data.updateEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
+      console.log(`[onAppointmentUpdated] LOOP PREVENTION: Both emails already sent, skipping.`);
+      return;
+    }
 
     const clientEmail: string | undefined = data.clientEmail || data.email;
     const clientName: string = data.clientName || 'Cliente';
@@ -496,32 +442,108 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
 });
 
 // Scheduled reminder ~24h before: runs hourly, sends for items within 23.5h-24.5h from now and not yet reminded
-export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async () => {
+export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async (event) => {
   const now = new Date();
   const in23_5h = new Date(now.getTime() + 23.5 * 3600 * 1000);
   const in24_5h = new Date(now.getTime() + 24.5 * 3600 * 1000);
-  try {
-    const db = admin.firestore();
-    const qs = await db.collectionGroup('appointments')
-      .where('dateTime', '>=', in23_5h)
-      .where('dateTime', '<=', in24_5h)
-      .get();
-    const batch = db.batch();
-    for (const docSnap of qs.docs) {
-      const ap: any = docSnap.data();
-      if (ap.reminder24hSent || (ap.status && ap.status !== 'Agendado')) continue;
-      const email = ap.clientEmail || ap.email;
-      if (!email) continue;
-      const name = ap.clientName || 'Cliente';
-      const serviceName = ap.service || 'Atendimento';
-      const dt: Date = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+  
+  const db = admin.firestore();
+  const tsStart = admin.firestore.Timestamp.fromDate(in23_5h);
+  const tsEnd = admin.firestore.Timestamp.fromDate(in24_5h);
+  console.log(`[${event.jobName}] V4 START: Range: ${tsStart.toDate().toISOString()} to ${tsEnd.toDate().toISOString()}`);
 
-      // Fetch professional's name
-      const userId = docSnap.ref.path.split('/')[1];
+  let appointmentDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+
+  // TEMPORARY: Use only fallback until indices are built
+  console.log(`[${event.jobName}] V4 USING_FALLBACK_ONLY: CollectionGroup disabled temporarily.`);
+  try {
+    const usersSnapshot = await db.collection('users').get();
+    console.log(`[${event.jobName}] V4 FALLBACK_INFO: Scanning ${usersSnapshot.size} users.`);
+    
+    const promises = usersSnapshot.docs.map(userDoc => 
+      db.collection(`users/${userDoc.id}/appointments`)
+        .where('dateTime', '>=', tsStart)
+        .where('dateTime', '<=', tsEnd)
+        .get()
+        .then(userAppointments => {
+          if (!userAppointments.empty) {
+            console.log(`[${event.jobName}] V4 FALLBACK_USER_SUCCESS: Found ${userAppointments.size} for user ${userDoc.id}`);
+            return userAppointments.docs;
+          }
+          return [];
+        })
+        .catch(userErr => {
+          console.warn(`[${event.jobName}] V4 CATCH_FALLBACK_USER: Failed for user ${userDoc.id}`, userErr);
+          return [];
+        })
+    );
+    
+    const results = await Promise.all(promises);
+    appointmentDocs = results.flat();
+    console.log(`[${event.jobName}] V4 SUCCESS_FALLBACK: Fallback scan finished. Total appointments: ${appointmentDocs.length}`);
+  } catch (fallbackErr) {
+    console.error(`[${event.jobName}] V4 CATCH_FALLBACK: The entire fallback scan failed.`, fallbackErr);
+    return; 
+  }
+
+  if (appointmentDocs.length === 0) {
+    console.log(`[${event.jobName}] V4 END: No appointments found. Job finished.`);
+    return;
+  }
+
+  let processedCount = 0;
+  
+  // Aggregated skip counters for diagnostics
+  const skipCounters: Record<string, number> = {
+    alreadySent: 0,
+    statusNotAgendado: 0,
+    missingEmail: 0,
+    invalidDate: 0,
+    ok: 0,
+  };
+
+  for (const docSnap of appointmentDocs) {
+    const ap: any = docSnap.data();
+    if (ap.reminder24hSent) { skipCounters.alreadySent++; continue; }
+    if (ap.status && ap.status !== 'Agendado') { skipCounters.statusNotAgendado++; continue; }
+    const email = ap.clientEmail || ap.email;
+    if (!email) { skipCounters.missingEmail++; continue; }
+
+    // Validate/normalize dateTime
+    let dt: Date | null = null;
+    try {
+      const raw = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+      if (raw && !isNaN(raw.getTime())) dt = raw; else dt = null;
+    } catch { dt = null; }
+    if (!dt) { skipCounters.invalidDate++; continue; }
+
+    const name = ap.clientName || 'Cliente';
+    const serviceName = ap.service || 'Atendimento';
+    const userId = docSnap.ref.path.split('/')[1];
+
+    // Try to acquire a short-lived transactional lock so overlapping scheduler runs don't both send the same reminder
+    const docRef = docSnap.ref;
+    let acquired = false;
+    try {
+      await db.runTransaction(async (tx) => {
+        const cur = await tx.get(docRef);
+        const curData = cur.exists ? cur.data() as any : {};
+        if (curData.reminder24hSent) return; // already sent
+        if (curData.reminder24hSending) return; // someone else is processing
+        tx.update(docRef, { reminder24hSending: admin.firestore.FieldValue.serverTimestamp() });
+        acquired = true;
+      }, { maxAttempts: 1 });
+    } catch (tErr) {
+      console.warn(`[${event.jobName}] V4 LOCK_FAIL: Could not acquire lock for ${docSnap.id}`, tErr);
+      acquired = false;
+    }
+
+    if (!acquired) { skipCounters.alreadySent++; continue; }
+
+    try {
       const userDoc = await db.doc(`users/${userId}`).get();
       const professionalName = userDoc.exists ? (userDoc.data() as any)?.name || 'Seu Profissional' : 'Seu Profissional';
 
-      // Load template (once would be better, but keep simple)
       const autoSnap = await db.doc('platform/automations').get();
       let subject = 'Lembrete do seu agendamento';
       let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {data}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {horário}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
@@ -537,25 +559,112 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
         'nome do serviço': serviceName,
         'data': dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
         'horário': dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
-        // Manter compatibilidade com variáveis antigas
-        clientName: name,
-        serviceName,
-        dateTime: formatDateTimePtBR(dt),
+        clientName: name, serviceName, dateTime: formatDateTimePtBR(dt),
         date: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
         time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
         professionalName,
       };
+
+      await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+      // Mark sent and clear sending flag
       try {
+        await docRef.update({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() });
+      } catch (w) {
+        console.warn(`[${event.jobName}] V4 WARNING: Failed to update sent flag for ${docSnap.id}`, w);
+      }
+
+      processedCount++;
+      skipCounters.ok++;
+      console.log(`[${event.jobName}] V4 PROCESS_SUCCESS: Sent reminder for appointment ${docSnap.id} to ${email}.`);
+    } catch (e) {
+      console.error(`[${event.jobName}] V4 PROCESS_FAIL: Error on appointment ${docSnap.id}.`, e);
+      // Clear sending flag so future runs can retry
+      try { await docRef.update({ reminder24hSending: admin.firestore.FieldValue.delete(), reminder24hError: (e as any)?.message || String(e), reminder24hErrorAt: admin.firestore.FieldValue.serverTimestamp() }); } catch (u) { console.warn('Failed to clear reminder24hSending after error', u); }
+    }
+  }
+
+  console.log(`[${event.jobName}] V4 SKIP_SUMMARY:`, JSON.stringify(skipCounters));
+  console.log(`[${event.jobName}] V4 PROCESSED_COUNT: ${processedCount}`);
+  if (processedCount === 0) {
+    console.log(`[${event.jobName}] V4 END: No valid reminders to send.`);
+  }
+  console.log(`[${event.jobName}] V4 END: Job finished.`);
+});
+
+// Callable debug helper: allows testing the reminder logic with a custom window and optional dry run
+export const debugSendDailyReminders = onCall({ region: 'us-central1' }, async (req) => {
+  const { minutesFrom = 1410, minutesTo = 1470, execute = false } = (req.data || {}) as any; // default ~23.5h-24.5h
+  if (minutesFrom >= minutesTo) throw new HttpsError('invalid-argument', 'minutesFrom deve ser < minutesTo');
+  const now = new Date();
+  const start = new Date(now.getTime() + minutesFrom * 60000);
+  const end = new Date(now.getTime() + minutesTo * 60000);
+  const db = admin.firestore();
+  const tsStart = admin.firestore.Timestamp.fromDate(start);
+  const tsEnd = admin.firestore.Timestamp.fromDate(end);
+
+  const out: any = { window: { start: tsStart.toDate().toISOString(), end: tsEnd.toDate().toISOString() }, found: 0, processed: 0, skips: {}, dryRun: !execute, details: [] };
+  try {
+    const qs = await db.collectionGroup('appointments')
+      .where('dateTime', '>=', tsStart)
+      .where('dateTime', '<=', tsEnd)
+      .get();
+    out.found = qs.size;
+    const skipCounters: Record<string, number> = { alreadySent: 0, statusNotAgendado: 0, missingEmail: 0, invalidDate: 0 };
+    for (const docSnap of qs.docs) {
+      const ap: any = docSnap.data();
+      const info: any = { id: docSnap.id };
+      if (ap.reminder24hSent) { skipCounters.alreadySent++; info.skip = 'alreadySent'; out.details.push(info); continue; }
+      if (ap.status && ap.status !== 'Agendado') { skipCounters.statusNotAgendado++; info.skip = 'statusNotAgendado'; out.details.push(info); continue; }
+      const email = ap.clientEmail || ap.email; if (!email) { skipCounters.missingEmail++; info.skip = 'missingEmail'; out.details.push(info); continue; }
+      let dt: Date | null = null; try { const raw = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime); if (raw && !isNaN(raw.getTime())) dt = raw; else dt = null; } catch { dt = null; }
+      if (!dt) { skipCounters.invalidDate++; info.skip = 'invalidDate'; out.details.push(info); continue; }
+      info.email = email;
+      if (!execute) { out.details.push(info); continue; }
+
+      // Acquire transactional lock similar to production path
+      const docRef = docSnap.ref;
+      let acquired = false;
+      try {
+        await db.runTransaction(async (tx) => {
+          const cur = await tx.get(docRef);
+          const curData = cur.exists ? cur.data() as any : {};
+          if (curData.reminder24hSent) return;
+          if (curData.reminder24hSending) return;
+          tx.update(docRef, { reminder24hSending: admin.firestore.FieldValue.serverTimestamp() });
+          acquired = true;
+        }, { maxAttempts: 1 });
+      } catch (tErr) {
+        acquired = false;
+      }
+
+      if (!acquired) { info.skip = 'locked'; out.details.push(info); continue; }
+
+      try {
+        const userId = docSnap.ref.path.split('/')[1];
+        const userDoc = await db.doc(`users/${userId}`).get();
+        const professionalName = userDoc.exists ? (userDoc.data() as any)?.name || 'Seu Profissional' : 'Seu Profissional';
+        const name = ap.clientName || 'Cliente';
+        const serviceName = ap.service || 'Atendimento';
+        const subject = 'TESTE Lembrete (debug)';
+        const body = `Debug: agendamento em ${dt.toISOString()} para {clientName}`;
+        const vars = { clientName: name } as any;
         await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
-        batch.update(docSnap.ref, { reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp() });
-      } catch (e) {
-        console.warn('Reminder email failed for', docSnap.ref.path, e);
+        await docSnap.ref.set({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() }, { merge: true });
+        out.processed++;
+        info.sent = true;
+        out.details.push(info);
+      } catch (e: any) {
+        info.error = e?.message || String(e);
+        // Clear sending marker on error so retries can happen
+        try { await docSnap.ref.update({ reminder24hSending: admin.firestore.FieldValue.delete(), reminder24hError: info.error, reminder24hErrorAt: admin.firestore.FieldValue.serverTimestamp() }); } catch {}
+        out.details.push(info);
       }
     }
-    await batch.commit();
-  } catch (e) {
-    console.warn('sendDailyReminders error', e);
+    out.skips = skipCounters;
+  } catch (e: any) {
+    throw new HttpsError('internal', e?.message || 'Erro debug reminders');
   }
+  return out;
 });
 
 // One-off callable to apply CORS configuration to the default Storage bucket
@@ -1717,7 +1826,7 @@ async function calculateRevenueMetrics(users: any[], transactions: any[], start:
     const monthRevenue = paidTransactions
       .filter(t => {
         const date = t.createdAt ? (t.createdAt.toDate ? t.createdAt.toDate() : new Date(t.createdAt)) : null;
-        return date && date >= monthStart && date <= monthEnd;
+        return date && date >= monthStart && date <= monthEnd && t.status === 'Paid';
       })
       .reduce((sum, t) => sum + (t.amount || 0), 0);
     
@@ -2019,1109 +2128,48 @@ export const notifyTrialsEndingToday = onSchedule({ schedule: 'every 24 hours', 
   }
 });
 
-// ============= RESOURCE MANAGEMENT FUNCTIONS =============
+// --- Billing Kill Switch Function ---
 
-// Plan limits configuration
-const PLAN_LIMITS: Record<string, PlanLimits> = {
-  'Trial': {
-    planName: 'Trial',
-    quotas: {
-      storage: { limit: 100, used: 0, unlimited: false }, // 100MB
-      bandwidth: { limit: 1, used: 0, unlimited: false }, // 1GB
-      apiCalls: { limit: 1000, used: 0, unlimited: false },
-      users: { limit: 50, used: 0, unlimited: false },
-      appointments: { limit: 100, used: 0, unlimited: false }
-    },
-    features: ['basic_booking', 'email_notifications'],
-    rateLimit: {
-      requestsPerMinute: 30,
-      requestsPerHour: 1000,
-      requestsPerDay: 5000
-    }
-  },
-  'Profissional': {
-    planName: 'Profissional',
-    quotas: {
-      storage: { limit: 1000, used: 0, unlimited: false }, // 1GB
-      bandwidth: { limit: 10, used: 0, unlimited: false }, // 10GB
-      apiCalls: { limit: 10000, used: 0, unlimited: false },
-      users: { limit: 500, used: 0, unlimited: false },
-      appointments: { limit: 2000, used: 0, unlimited: false }
-    },
-    features: ['advanced_booking', 'analytics', 'automation', 'custom_branding'],
-    rateLimit: {
-      requestsPerMinute: 100,
-      requestsPerHour: 5000,
-      requestsPerDay: 50000
-    }
-  },
-  'Enterprise': {
-    planName: 'Enterprise',
-    quotas: {
-      storage: { limit: 0, used: 0, unlimited: true },
-      bandwidth: { limit: 0, used: 0, unlimited: true },
-      apiCalls: { limit: 0, used: 0, unlimited: true },
-      users: { limit: 0, used: 0, unlimited: true },
-      appointments: { limit: 0, used: 0, unlimited: true }
-    },
-    features: ['everything', 'priority_support', 'white_label', 'api_access'],
-    rateLimit: {
-      requestsPerMinute: 1000,
-      requestsPerHour: 50000,
-      requestsPerDay: 1000000
-    }
+const billing = new Billing();
+// The project ID is automatically available in the Cloud Functions environment
+const PROJECT_ID = process.env.GCLOUD_PROJECT;
+const PROJECT_NAME = `projects/${PROJECT_ID}`;
+
+/**
+ * This function is triggered by a Pub/Sub message from a Cloud Billing budget alert.
+ * It checks if the cost has exceeded the budget and, if so, disables billing for the project
+ * to prevent further costs. This is a critical safety measure.
+ */
+export const stopBilling = onMessagePublished('billing-kill-switch', async (event) => {
+  const pubsubMessage = event.data.message;
+  // The message payload is a JSON object with cost and budget details
+  const budgetData = pubsubMessage.json;
+
+  // Defensive check: ensure the cost has actually exceeded the budget
+  if (budgetData.costAmount <= budgetData.budgetAmount) {
+    console.log(`No action taken. Cost ${budgetData.costAmount} is not over budget ${budgetData.budgetAmount}.`);
+    return;
   }
-};
 
-// Get resource usage for all users
-export const getResourceUsage = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  // Apply admin rate limiting
-  await applyRateLimit(auth.uid, 'getResourceUsage', adminRateLimiter);
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
+  console.log(`BUDGET ALERT: Cost ${budgetData.costAmount} has exceeded budget ${budgetData.budgetAmount}. Disabling billing for project ${PROJECT_ID}.`);
+
   try {
-    const usersSnapshot = await admin.firestore().collection('users').get();
-    const resourceUsage: ResourceUsage[] = [];
-    
-    for (const userDoc of usersSnapshot.docs) {
-      const userData = userDoc.data();
-      const userId = userDoc.id;
-      
-      // Calculate current usage
-      const usage = await calculateUserResourceUsage(userId, userData);
-      resourceUsage.push(usage);
-    }
-    
-    return resourceUsage;
-  } catch (error) {
-    console.error('Error getting resource usage:', error);
-    throw new HttpsError('internal', 'Failed to get resource usage');
-  }
-});
+    const [projects] = await billing.listProjects();
+    const project = projects.find(p => p.projectId === PROJECT_ID);
 
-// Update user resource quotas
-export const updateUserQuotas = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  // Apply admin rate limiting
-  await applyRateLimit(auth.uid, 'updateUserQuotas', adminRateLimiter);
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { userId, quotas } = data;
-  if (!userId || !quotas) {
-    throw new HttpsError('invalid-argument', 'Missing userId or quotas');
-  }
-  
-  try {
-    await admin.firestore().collection('users').doc(userId).update({
-      customQuotas: quotas,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    return { success: true };
-  } catch (error) {
-    console.error('Error updating user quotas:', error);
-    throw new HttpsError('internal', 'Failed to update quotas');
-  }
-});
-
-// Get resource violations
-export const getResourceViolations = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const violationsSnapshot = await admin.firestore()
-      .collection('resourceViolations')
-      .where('resolved', '==', false)
-      .orderBy('timestamp', 'desc')
-      .limit(100)
-      .get();
-    
-    const violations: ResourceViolation[] = violationsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as ResourceViolation));
-    
-    return violations;
-  } catch (error) {
-    console.error('Error getting resource violations:', error);
-    throw new HttpsError('internal', 'Failed to get violations');
-  }
-});
-
-// Monitor external service usage
-export const getExternalServiceUsage = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    // Get Firebase usage (simplified - in production use Firebase billing APIs)
-    const usersCount = (await admin.firestore().collection('users').count().get()).data().count;
-    const appointmentsCount = (await admin.firestore().collectionGroup('appointments').count().get()).data().count;
-    
-    // Estimate costs based on usage
-    const firebaseUsage = {
-      reads: usersCount * 10, // Estimated reads per user
-      writes: appointmentsCount * 2, // Estimated writes per appointment
-      storage: usersCount * 0.5, // MB per user
-      functions: appointmentsCount * 3, // Function calls per appointment
-      cost: (usersCount * 0.01) + (appointmentsCount * 0.005) // Estimated cost
-    };
-    
-    // Get Stripe usage (if configured)
-    let stripeUsage = { transactions: 0, webhooks: 0, cost: 0 };
-    try {
-      const stripeConfig = await admin.firestore().doc('platform/stripe').get();
-      if (stripeConfig.exists) {
-        const transactionsCount = (await admin.firestore().collectionGroup('transactions').count().get()).data().count;
-        stripeUsage = {
-          transactions: transactionsCount,
-          webhooks: transactionsCount * 2, // Estimated webhooks
-          cost: transactionsCount * 0.3 // Stripe fee estimate
-        };
-      }
-    } catch (e) {
-      console.log('Stripe config not found');
-    }
-    
-    // Get email usage
-    let brevoUsage = { emails: 0, cost: 0 };
-    try {
-      const emailsCount = usersCount * 5; // Estimated emails per user
-      brevoUsage = {
-        emails: emailsCount,
-        cost: emailsCount * 0.001 // Estimated cost per email
-      };
-    } catch (e) {
-      console.log('Email usage calculation failed');
-    }
-    
-    const externalUsage: ExternalServiceUsage = {
-      firebase: firebaseUsage,
-      stripe: stripeUsage,
-      brevo: brevoUsage,
-      mercadoPago: { transactions: 0, cost: 0 } // Placeholder
-    };
-    
-    return externalUsage;
-  } catch (error) {
-    console.error('Error getting external service usage:', error);
-    throw new HttpsError('internal', 'Failed to get external service usage');
-  }
-});
-
-// Get cost alerts
-export const getCostAlerts = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const alertsSnapshot = await admin.firestore()
-      .collection('costAlerts')
-      .where('acknowledged', '==', false)
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const alerts: CostAlert[] = alertsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as CostAlert));
-    
-    return alerts;
-  } catch (error) {
-    console.error('Error getting cost alerts:', error);
-    throw new HttpsError('internal', 'Failed to get cost alerts');
-  }
-});
-
-// Create cost alert
-export const createCostAlert = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { service, threshold, alertType } = data;
-  if (!service || !threshold || !alertType) {
-    throw new HttpsError('invalid-argument', 'Missing required fields');
-  }
-  
-  try {
-    const alert: Omit<CostAlert, 'id'> = {
-      service,
-      threshold,
-      currentAmount: 0,
-      alertType,
-      severity: 'Info',
-      message: `Cost alert for ${service} with threshold $${threshold}`,
-      createdAt: new Date(),
-      acknowledged: false
-    };
-    
-    const docRef = await admin.firestore().collection('costAlerts').add(alert);
-    
-    return { id: docRef.id, ...alert };
-  } catch (error) {
-    console.error('Error creating cost alert:', error);
-    throw new HttpsError('internal', 'Failed to create cost alert');
-  }
-});
-
-// Resource monitoring scheduled function
-export const monitorResources = onSchedule('every 1 hours', async (event) => {
-  try {
-    console.log('Starting resource monitoring...');
-    
-    const usersSnapshot = await admin.firestore().collection('users').get();
-    const violations: Omit<ResourceViolation, 'id'>[] = [];
-    
-    for (const userDoc of usersSnapshot.docs) {
-      const userData = userDoc.data();
-      const userId = userDoc.id;
-      
-      // Check resource usage
-      const usage = await calculateUserResourceUsage(userId, userData);
-      
-      // Check for violations
-      const userViolations = checkResourceViolations(usage);
-      violations.push(...userViolations);
-      
-      // Update user resource status
-      await admin.firestore().collection('users').doc(userId).update({
-        resourceStatus: usage.status,
-        lastResourceCheck: admin.firestore.FieldValue.serverTimestamp()
+    if (project && project.billingEnabled) {
+      // This is the "kill switch" action. It detaches the project from its billing account.
+      const [res] = await billing.updateProjectBillingInfo({
+        name: PROJECT_NAME,
+        // Setting billingAccountName to an empty string disables billing
+        projectBillingInfo: { billingAccountName: '' },
       });
+      console.log(`SUCCESS: Billing has been disabled for project ${PROJECT_ID}. Response: ${JSON.stringify(res)}`);
+    } else {
+      console.log(`Billing was already disabled for project ${PROJECT_ID} or the project was not found.`);
     }
-    
-    // Save violations to Firestore
-    const batch = admin.firestore().batch();
-    violations.forEach(violation => {
-      const docRef = admin.firestore().collection('resourceViolations').doc();
-      batch.set(docRef, violation);
-    });
-    
-    if (violations.length > 0) {
-      await batch.commit();
-      console.log(`Created ${violations.length} resource violations`);
-    }
-    
-    // Generate resource monitoring report
-    const monitoring = await generateResourceMonitoring();
-    await admin.firestore().collection('resourceMonitoring').add(monitoring);
-    
-    console.log('Resource monitoring completed');
-  } catch (error) {
-    console.error('Error in resource monitoring:', error);
-  }
-});
-
-// Helper function to calculate user resource usage
-async function calculateUserResourceUsage(userId: string, userData: any): Promise<ResourceUsage> {
-  const plan = userData.plan || 'Trial';
-  const planLimits = PLAN_LIMITS[plan] || PLAN_LIMITS['Trial'];
-  const customQuotas = userData.customQuotas;
-  
-  // Use custom quotas if available, otherwise use plan defaults
-  const quotas = customQuotas || planLimits.quotas;
-  
-  // Calculate actual usage
-  const storage = await calculateUserStorage(userId);
-  const bandwidth = await calculateUserBandwidth(userId);
-  const apiCalls = await calculateUserApiCalls(userId);
-  const appointments = await calculateUserAppointments(userId);
-  
-  const currentUsage: ResourceUsage = {
-    userId,
-    userEmail: userData.email || 'unknown',
-    plan,
-    quotas: {
-      storage: { ...quotas.storage, used: storage },
-      bandwidth: { ...quotas.bandwidth, used: bandwidth },
-      apiCalls: { ...quotas.apiCalls, used: apiCalls },
-      users: { ...quotas.users, used: 1 }, // User themselves
-      appointments: { ...quotas.appointments, used: appointments }
-    },
-    lastUpdated: new Date(),
-    status: 'Normal',
-    violations: []
-  };
-  
-  // Determine status based on usage
-  const overLimits = Object.entries(currentUsage.quotas).filter(([key, quota]) => {
-    if (quota.unlimited) return false;
-    return quota.used > quota.limit;
-  });
-  
-  const nearLimits = Object.entries(currentUsage.quotas).filter(([key, quota]) => {
-    if (quota.unlimited) return false;
-    return quota.used > quota.limit * 0.8 && quota.used <= quota.limit;
-  });
-  
-  if (overLimits.length > 0) {
-    currentUsage.status = 'OverLimit';
-  } else if (nearLimits.length > 0) {
-    currentUsage.status = 'Warning';
-  }
-  
-  return currentUsage;
-}
-
-// Helper functions for usage calculation
-async function calculateUserStorage(userId: string): Promise<number> {
-  // Simplified storage calculation
-  try {
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
-    const appointmentsSnapshot = await admin.firestore()
-      .collection('users').doc(userId)
-      .collection('appointments').get();
-    
-    // Estimate storage based on document count and average size
-    const docCount = 1 + appointmentsSnapshot.size;
-    return docCount * 0.01; // 0.01MB per document estimate
-  } catch (error) {
-    return 0;
-  }
-}
-
-async function calculateUserBandwidth(userId: string): Promise<number> {
-  // Simplified bandwidth calculation
-  try {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    // Estimate based on recent activity (would need actual request logs)
-    const appointmentsSnapshot = await admin.firestore()
-      .collection('users').doc(userId)
-      .collection('appointments')
-      .where('createdAt', '>=', monthStart)
-      .get();
-    
-    return appointmentsSnapshot.size * 0.001; // 1KB per request estimate
-  } catch (error) {
-    return 0;
-  }
-}
-
-async function calculateUserApiCalls(userId: string): Promise<number> {
-  // Simplified API calls calculation
-  try {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    // Estimate based on appointments and user activity
-    const appointmentsSnapshot = await admin.firestore()
-      .collection('users').doc(userId)
-      .collection('appointments')
-      .where('createdAt', '>=', monthStart)
-      .get();
-    
-    return appointmentsSnapshot.size * 5; // 5 API calls per appointment estimate
-  } catch (error) {
-    return 0;
-  }
-}
-
-async function calculateUserAppointments(userId: string): Promise<number> {
-  try {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const appointmentsSnapshot = await admin.firestore()
-      .collection('users').doc(userId)
-      .collection('appointments')
-      .where('createdAt', '>=', monthStart)
-      .get();
-    
-    return appointmentsSnapshot.size;
-  } catch (error) {
-    return 0;
-  }
-}
-
-// Check for resource violations
-function checkResourceViolations(usage: ResourceUsage): Omit<ResourceViolation, 'id'>[] {
-  const violations: Omit<ResourceViolation, 'id'>[] = [];
-  
-  Object.entries(usage.quotas).forEach(([resourceType, quota]) => {
-    if (quota.unlimited) return;
-    
-    if (quota.used > quota.limit) {
-      violations.push({
-        userId: usage.userId,
-        type: resourceType as any,
-        severity: 'High',
-        message: `${resourceType} usage (${quota.used}) exceeds limit (${quota.limit})`,
-        timestamp: new Date(),
-        resolved: false,
-        action: 'throttle'
-      });
-    } else if (quota.used > quota.limit * 0.9) {
-      violations.push({
-        userId: usage.userId,
-        type: resourceType as any,
-        severity: 'Medium',
-        message: `${resourceType} usage (${quota.used}) is near limit (${quota.limit})`,
-        timestamp: new Date(),
-        resolved: false,
-        action: 'notify'
-      });
-    }
-  });
-  
-  return violations;
-}
-
-// Generate resource monitoring report
-async function generateResourceMonitoring(): Promise<ResourceMonitoring> {
-  const usersSnapshot = await admin.firestore().collection('users').get();
-  const activeUsers = usersSnapshot.docs.filter(doc => {
-    const data = doc.data();
-    const lastLogin = data.lastLogin ? (data.lastLogin.toDate ? data.lastLogin.toDate() : new Date(data.lastLogin)) : null;
-    if (!lastLogin) return false;
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    return lastLogin > dayAgo;
-  }).length;
-  
-  // Calculate totals
-  let totalStorage = 0;
-  let totalBandwidth = 0;
-  let totalApiCalls = 0;
-  
-  for (const userDoc of usersSnapshot.docs) {
-    const userId = userDoc.id;
-    totalStorage += await calculateUserStorage(userId);
-    totalBandwidth += await calculateUserBandwidth(userId);
-    totalApiCalls += await calculateUserApiCalls(userId);
-  }
-  
-  // Get external service usage
-  const externalUsage = {
-    firebase: {
-      reads: totalApiCalls * 2,
-      writes: totalApiCalls,
-      storage: totalStorage,
-      functions: totalApiCalls * 0.5,
-      cost: totalStorage * 0.026 + totalApiCalls * 0.0006
-    },
-    stripe: { transactions: 0, webhooks: 0, cost: 0 },
-    brevo: { emails: usersSnapshot.size * 5, cost: usersSnapshot.size * 0.005 },
-    mercadoPago: { transactions: 0, cost: 0 }
-  };
-  
-  const costBreakdown = {
-    firebase: externalUsage.firebase.cost,
-    stripe: externalUsage.stripe.cost,
-    brevo: externalUsage.brevo.cost,
-    mercadoPago: externalUsage.mercadoPago.cost
-  };
-  
-  const totalCost = Object.values(costBreakdown).reduce((sum, cost) => sum + cost, 0);
-  
-  return {
-    timestamp: new Date(),
-    totalUsers: usersSnapshot.size,
-    activeUsers,
-    totalStorage,
-    totalBandwidth,
-    totalApiCalls,
-    externalServices: externalUsage,
-    costBreakdown,
-    projectedMonthlyCost: totalCost * 30 // Daily cost * 30
-  };
-}
-
-// Get rate limiting statistics
-export const getRateLimitStats = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  // Apply admin rate limiting
-  await applyRateLimit(auth.uid, 'getRateLimitStats', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const stats = {
-      userRateLimiter: userRateLimiter.getStats(),
-      adminRateLimiter: adminRateLimiter.getStats(),
-      globalRateLimiter: require('./rateLimiter').globalRateLimiter.getStats()
-    };
-    
-    return stats;
-  } catch (error) {
-    console.error('Error getting rate limit stats:', error);
-    throw new HttpsError('internal', 'Failed to get rate limit statistics');
-  }
-});
-
-// ============= CONTENT MANAGEMENT FUNCTIONS =============
-
-// Email Templates Management
-export const getEmailTemplates = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getEmailTemplates', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const templatesSnapshot = await admin.firestore()
-      .collection('emailTemplates')
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const templates: EmailTemplate[] = templatesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as EmailTemplate));
-    
-    return templates;
-  } catch (error) {
-    console.error('Error getting email templates:', error);
-    throw new HttpsError('internal', 'Failed to get email templates');
-  }
-});
-
-export const createEmailTemplate = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'createEmailTemplate', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { name, subject, content, type, category, variables } = data;
-  if (!name || !subject || !content || !type) {
-    throw new HttpsError('invalid-argument', 'Missing required fields');
-  }
-  
-  try {
-    // Generate HTML content from markdown or rich text
-    const htmlContent = content; // In production, you'd use a markdown parser
-    
-    const template: Omit<EmailTemplate, 'id'> = {
-      name,
-      subject,
-      content,
-      htmlContent,
-      type,
-      variables: variables || [],
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      createdBy: auth.uid,
-      category: category || 'general'
-    };
-    
-    const docRef = await admin.firestore().collection('emailTemplates').add(template);
-    
-    return { id: docRef.id, ...template };
-  } catch (error) {
-    console.error('Error creating email template:', error);
-    throw new HttpsError('internal', 'Failed to create email template');
-  }
-});
-
-export const updateEmailTemplate = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'updateEmailTemplate', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { templateId, updates } = data;
-  if (!templateId || !updates) {
-    throw new HttpsError('invalid-argument', 'Missing templateId or updates');
-  }
-  
-  try {
-    const updateData = {
-      ...updates,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    await admin.firestore()
-      .collection('emailTemplates')
-      .doc(templateId)
-      .update(updateData);
-    
-    return { success: true };
-  } catch (error) {
-    console.error('Error updating email template:', error);
-    throw new HttpsError('internal', 'Failed to update email template');
-  }
-});
-
-// Landing Pages Management
-export const getLandingPages = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getLandingPages', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const pagesSnapshot = await admin.firestore()
-      .collection('landingPages')
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const pages: LandingPage[] = pagesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as LandingPage));
-    
-    return pages;
-  } catch (error) {
-    console.error('Error getting landing pages:', error);
-    throw new HttpsError('internal', 'Failed to get landing pages');
-  }
-});
-
-export const createLandingPage = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'createLandingPage', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { title, slug, content, metaTitle, metaDescription, keywords, sections } = data;
-  if (!title || !slug || !content) {
-    throw new HttpsError('invalid-argument', 'Missing required fields');
-  }
-  
-  try {
-    // Check if slug already exists
-    const existingPage = await admin.firestore()
-      .collection('landingPages')
-      .where('slug', '==', slug)
-      .get();
-    
-    if (!existingPage.empty) {
-      throw new HttpsError('already-exists', 'Slug already exists');
-    }
-    
-    const htmlContent = content; // In production, you'd use a markdown parser
-    
-    const page: Omit<LandingPage, 'id'> = {
-      title,
-      slug,
-      content,
-      htmlContent,
-      metaTitle: metaTitle || title,
-      metaDescription: metaDescription || '',
-      keywords: keywords || [],
-      isPublished: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      createdBy: auth.uid,
-      sections: sections || [],
-      seoScore: 0, // Would be calculated based on content analysis
-      analytics: {
-        views: 0,
-        conversions: 0,
-        bounceRate: 0
-      }
-    };
-    
-    const docRef = await admin.firestore().collection('landingPages').add(page);
-    
-    return { id: docRef.id, ...page };
-  } catch (error) {
-    console.error('Error creating landing page:', error);
-    throw new HttpsError('internal', 'Failed to create landing page');
-  }
-});
-
-export const publishLandingPage = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'publishLandingPage', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { pageId, isPublished } = data;
-  if (!pageId || typeof isPublished !== 'boolean') {
-    throw new HttpsError('invalid-argument', 'Missing pageId or isPublished');
-  }
-  
-  try {
-    const updateData: any = {
-      isPublished,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    if (isPublished) {
-      updateData.publishedAt = admin.firestore.FieldValue.serverTimestamp();
-    }
-    
-    await admin.firestore()
-      .collection('landingPages')
-      .doc(pageId)
-      .update(updateData);
-    
-    return { success: true };
-  } catch (error) {
-    console.error('Error publishing landing page:', error);
-    throw new HttpsError('internal', 'Failed to publish landing page');
-  }
-});
-
-// Wiki Management
-export const getWikiPages = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getWikiPages', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const pagesSnapshot = await admin.firestore()
-      .collection('wikiPages')
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const pages: WikiPage[] = pagesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as WikiPage));
-    
-    return pages;
-  } catch (error) {
-    console.error('Error getting wiki pages:', error);
-    throw new HttpsError('internal', 'Failed to get wiki pages');
-  }
-});
-
-export const createWikiPage = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'createWikiPage', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const { title, content, category, tags, parentId } = data;
-  if (!title || !content || !category) {
-    throw new HttpsError('invalid-argument', 'Missing required fields');
-  }
-  
-  try {
-    const htmlContent = content; // In production, you'd use a markdown parser
-    
-    const page: Omit<WikiPage, 'id'> = {
-      title,
-      content,
-      htmlContent,
-      category,
-      tags: tags || [],
-      isPublished: false,
-      version: 1,
-      parentId: parentId || undefined,
-      children: [],
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      createdBy: auth.uid,
-      lastEditedBy: auth.uid,
-      viewCount: 0,
-      searchTerms: title.toLowerCase().split(' ').concat(tags || [])
-    };
-    
-    const docRef = await admin.firestore().collection('wikiPages').add(page);
-    
-    // Update parent page's children array if parentId exists
-    if (parentId) {
-      await admin.firestore()
-        .collection('wikiPages')
-        .doc(parentId)
-        .update({
-          children: admin.firestore.FieldValue.arrayUnion(docRef.id)
-        });
-    }
-    
-    return { id: docRef.id, ...page };
-  } catch (error) {
-    console.error('Error creating wiki page:', error);
-    throw new HttpsError('internal', 'Failed to create wiki page');
-  }
-});
-
-// Announcements Management
-export const getAnnouncements = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getAnnouncements', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    const announcementsSnapshot = await admin.firestore()
-      .collection('announcements')
-      .orderBy('createdAt', 'desc')
-      .get();
-    
-    const announcements: Announcement[] = announcementsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    } as Announcement));
-    
-    return announcements;
-  } catch (error) {
-    console.error('Error getting announcements:', error);
-    throw new HttpsError('internal', 'Failed to get announcements');
-  }
-});
-
-export const createAnnouncement = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'createAnnouncement', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  const {
-    title,
-    content,
-    type,
-    priority,
-    targetAudience,
-    targetUserIds,
-    targetPlans,
-    startDate,
-    endDate,
-    isDismissible,
-    showOnDashboard,
-    showAsPopup
-  } = data;
-  
-  if (!title || !content || !type || !priority || !targetAudience || !startDate) {
-    throw new HttpsError('invalid-argument', 'Missing required fields');
-  }
-  
-  try {
-    const htmlContent = content; // In production, you'd use a markdown parser
-    
-    const announcement: Omit<Announcement, 'id'> = {
-      title,
-      content,
-      htmlContent,
-      type,
-      priority,
-      targetAudience,
-      targetUserIds: targetUserIds || undefined,
-      targetPlans: targetPlans || undefined,
-      startDate: new Date(startDate),
-      endDate: endDate ? new Date(endDate) : undefined,
-      isActive: true,
-      isDismissible: isDismissible !== false,
-      showOnDashboard: showOnDashboard !== false,
-      showAsPopup: showAsPopup === true,
-      createdAt: new Date(),
-      createdBy: auth.uid,
-      viewCount: 0,
-      dismissedBy: []
-    };
-    
-    const docRef = await admin.firestore().collection('announcements').add(announcement);
-    
-    return { id: docRef.id, ...announcement };
-  } catch (error) {
-    console.error('Error creating announcement:', error);
-    throw new HttpsError('internal', 'Failed to create announcement');
-  }
-});
-
-// Get active announcements for users
-export const getActiveAnnouncements = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getActiveAnnouncements', userRateLimiter);
-  
-  try {
-    const now = new Date();
-    
-    // Get user data to check plan
-    const userDoc = await admin.firestore().collection('users').doc(auth.uid).get();
-    const userData = userDoc.data();
-    const userPlan = userData?.plan || 'Trial';
-    const isAdmin = userData?.role === 'admin';
-    
-    const announcementsSnapshot = await admin.firestore()
-      .collection('announcements')
-      .where('isActive', '==', true)
-      .where('startDate', '<=', now)
-      .get();
-    
-    const announcements = announcementsSnapshot.docs
-      .map(doc => ({ id: doc.id, ...doc.data() } as Announcement))
-      .filter(announcement => {
-        // Check if announcement has expired
-        if (announcement.endDate && announcement.endDate < now) {
-          return false;
-        }
-        
-        // Check target audience
-        if (announcement.targetAudience === 'all') {
-          return true;
-        } else if (announcement.targetAudience === 'admins' && isAdmin) {
-          return true;
-        } else if (announcement.targetAudience === 'users' && !isAdmin) {
-          return true;
-        } else if (announcement.targetAudience === 'specific') {
-          // Check if user is in target list or has target plan
-          const inTargetUsers = announcement.targetUserIds?.includes(auth.uid);
-          const hasTargetPlan = announcement.targetPlans?.includes(userPlan);
-          return inTargetUsers || hasTargetPlan;
-        }
-        
-        return false;
-      })
-      .filter(announcement => {
-        // Filter out dismissed announcements if they are dismissible
-        if (announcement.isDismissible && announcement.dismissedBy.includes(auth.uid)) {
-          return false;
-        }
-        return true;
-      });
-    
-    return announcements;
-  } catch (error) {
-    console.error('Error getting active announcements:', error);
-    throw new HttpsError('internal', 'Failed to get active announcements');
-  }
-});
-
-// Dismiss announcement
-export const dismissAnnouncement = onCall(async (request) => {
-  const { auth, data } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'dismissAnnouncement', userRateLimiter);
-  
-  const { announcementId } = data;
-  if (!announcementId) {
-    throw new HttpsError('invalid-argument', 'Missing announcementId');
-  }
-  
-  try {
-    await admin.firestore()
-      .collection('announcements')
-      .doc(announcementId)
-      .update({
-        dismissedBy: admin.firestore.FieldValue.arrayUnion(auth.uid)
-      });
-    
-    return { success: true };
-  } catch (error) {
-    console.error('Error dismissing announcement:', error);
-    throw new HttpsError('internal', 'Failed to dismiss announcement');
-  }
-});
-
-// Content Analytics
-export const getContentAnalytics = onCall(async (request) => {
-  const { auth } = request;
-  if (!auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  
-  await applyRateLimit(auth.uid, 'getContentAnalytics', adminRateLimiter);
-  await assertIsPlatformAdmin(auth.uid);
-  
-  try {
-    // Get email templates stats
-    const templatesSnapshot = await admin.firestore().collection('emailTemplates').get();
-    const templates = templatesSnapshot.docs.map(doc => doc.data());
-    
-    // Get landing pages stats
-    const pagesSnapshot = await admin.firestore().collection('landingPages').get();
-    const pages = pagesSnapshot.docs.map(doc => doc.data() as LandingPage);
-    
-    // Get wiki pages stats
-    const wikiSnapshot = await admin.firestore().collection('wikiPages').get();
-    const wikiPages = wikiSnapshot.docs.map(doc => doc.data() as WikiPage);
-    
-    // Get announcements stats
-    const announcementsSnapshot = await admin.firestore().collection('announcements').get();
-    const announcements = announcementsSnapshot.docs.map(doc => doc.data() as Announcement);
-    
-    const analytics = {
-      emailTemplates: {
-        totalTemplates: templates.length,
-        activeTemplates: templates.filter((t: any) => t.isActive).length,
-        topPerforming: [], // Would be populated with actual email performance data
-        categoryStats: templates.reduce((acc: any, t: any) => {
-          acc[t.category] = (acc[t.category] || 0) + 1;
-          return acc;
-        }, {})
-      },
-      landingPages: {
-        totalPages: pages.length,
-        publishedPages: pages.filter(p => p.isPublished).length,
-        totalViews: pages.reduce((sum, p) => sum + (p.analytics?.views || 0), 0),
-        totalConversions: pages.reduce((sum, p) => sum + (p.analytics?.conversions || 0), 0),
-        averageBounceRate: pages.length > 0 
-          ? pages.reduce((sum, p) => sum + (p.analytics?.bounceRate || 0), 0) / pages.length 
-          : 0,
-        topPerforming: pages
-          .filter(p => p.analytics)
-          .sort((a, b) => (b.analytics?.views || 0) - (a.analytics?.views || 0))
-          .slice(0, 5)
-          .map(p => ({
-            id: p.id,
-            title: p.title,
-            views: p.analytics?.views || 0,
-            conversions: p.analytics?.conversions || 0
-          }))
-      },
-      wiki: {
-        totalPages: wikiPages.length,
-        publishedPages: wikiPages.filter(p => p.isPublished).length,
-        totalViews: wikiPages.reduce((sum, p) => sum + p.viewCount, 0),
-        topViewed: wikiPages
-          .sort((a, b) => b.viewCount - a.viewCount)
-          .slice(0, 5)
-          .map(p => ({
-            id: p.id,
-            title: p.title,
-            views: p.viewCount
-          })),
-        categoryStats: wikiPages.reduce((acc: any, p) => {
-          acc[p.category] = (acc[p.category] || 0) + 1;
-          return acc;
-        }, {})
-      },
-      announcements: {
-        totalAnnouncements: announcements.length,
-        activeAnnouncements: announcements.filter(a => a.isActive).length,
-        totalViews: announcements.reduce((sum, a) => sum + a.viewCount, 0),
-        averageDismissalRate: announcements.length > 0
-          ? announcements.reduce((sum, a) => sum + (a.dismissedBy?.length || 0), 0) / announcements.length
-          : 0,
-        topPerforming: announcements
-          .filter(a => a.viewCount)
-          .sort((a, b) => b.viewCount - a.viewCount)
-          .slice(0, 5)
-          .map(a => ({
-            id: a.id,
-            title: a.title,
-            views: a.viewCount
-          }))
-      }
-    };
-    
-    return analytics;
-  } catch (error) {
-    console.error('Error getting content analytics:', error);
-    throw new HttpsError('internal', 'Failed to get content analytics');
+  } catch (err) {
+    console.error('FATAL: FAILED TO DISABLE BILLING. IMMEDIATE MANUAL ACTION REQUIRED.', err);
+    // You could add a fallback notification here, like sending an email through a different, free service.
   }
 });

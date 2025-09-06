@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google-cloud/billing": "^5.1.0",
     "@google/genai": "^1.12.0",
     "@stripe/stripe-js": "^7.8.0",
     "@vercel/analytics": "^1.5.0",

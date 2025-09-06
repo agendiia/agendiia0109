@@ -40,3 +40,11 @@ dist-ssr
 *.sw?
 
 .env
+test-professional-debug.html
+admin-diagnostics.html
+create-test-appointment.js
+test-cancel-client.js
+test-cancel-debug.js
+test-reminder-debug.html
+test-user-actions.html
+teste-cors-final.html

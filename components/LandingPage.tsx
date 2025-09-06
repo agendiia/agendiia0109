@@ -12,6 +12,7 @@ export const LandingHeader: React.FC = () => {
 
   const MenuLinks = () => (
     <>
+      <a href="/#para-quem" className="text-sm font-medium text-gray-700 hover:text-gray-900">Para Quem</a>
       <a href="/#recursos" className="text-sm font-medium text-gray-700 hover:text-gray-900">Recursos</a>
       <a href="/#como-funciona" className="text-sm font-medium text-gray-700 hover:text-gray-900">Como funciona</a>
       <a href="/#planos" className="text-sm font-medium text-gray-700 hover:text-gray-900">Planos</a>
@@ -119,10 +120,17 @@ const PricingCard: React.FC<{ name: string; price: string; features: string[]; c
       {features.map((f, i) => (<li key={i} className="flex items-start gap-2"><span className="text-green-600">✓</span><span>{f}</span></li>))}
     </ul>
     <a href={ctaHref} className={`mt-6 text-center px-5 py-3 rounded-lg ${best ? 'btn-theme' : 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-100'} font-semibold transition-colors`}>
-      Começar agora
+      Experimente Grátis
     </a>
   </motion.div>
 );
+
+// novos constantes de preço
+const PROFESSIONAL_PRICE = "R$ 39,00";
+const ADVANCED_PRICE = "R$ 59,00";
+
+const STRIPE_PROF_LINK = process.env.VITE_STRIPE_PROF_MONTHLY_LINK || "https://buy.stripe.com/28E3cw4xJ8ja4xKcHZ2VG04";
+const STRIPE_ADV_LINK = process.env.VITE_STRIPE_ADV_MONTHLY_LINK || "https://buy.stripe.com/7sYfZifcndDu5BO6jB2VG05";
 
 const LandingPage: React.FC = () => {
   return (
@@ -268,9 +276,53 @@ const LandingPage: React.FC = () => {
           </div>
         </Section>
 
+        {/* FOR WHOM SECTION */}
+        <Section id="para-quem" className="py-16 text-center bg-white dark:bg-gray-900">
+          <h2 className="text-3xl font-bold">A escolha certa para profissionais modernos</h2>
+          <p className="text-center text-gray-600 dark:text-gray-300 mt-2 max-w-2xl mx-auto">
+            Organize sua agenda, reduza faltas e melhore a experiência dos seus clientes. Agenda com IA criada especialmente para profissionais de saúde, bem-estar e serviços que querem ganhar tempo e produtividade.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3 mt-8">
+            { [
+              'Psicólogos', 'Nutricionistas', 'Fisioterapeutas', 'Esteticistas',
+              'Terapeutas', 'Coaches', 'Consultores', 'Personal Trainers', 'e muito mais...'
+            ].map((prof, index) => (
+              <motion.div
+                key={index}
+                className="bg-indigo-100 text-indigo-700 text-sm font-medium px-4 py-2 rounded-full shadow-sm"
+                initial={{ opacity: 0, scale: 0.8 }}
+                whileInView={{ opacity: 1, scale: 1 }}
+                viewport={{ once: true, amount: 0.2 }}
+                transition={{ duration: 0.3, delay: index * 0.05 }}
+              >
+                {prof}
+              </motion.div>
+            )) }
+          </div>
+          
+          {/* CTA destacado - Experimente grátis */}
+          <motion.div 
+            className="mt-10 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl p-6 max-w-lg mx-auto shadow-lg"
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.3 }}
+            transition={{ duration: 0.5 }}
+          >
+            <h3 className="text-xl font-bold mb-2">🚀 Experimente 14 dias GRÁTIS</h3>
+            <p className="text-indigo-100 text-sm mb-4">Teste todos os recursos sem compromisso</p>
+            <PrimaryButton 
+              onClick={() => { window.location.href = '/login?signup=1'; }}
+              className="bg-white text-indigo-600 hover:bg-gray-50 hover:text-black w-full"
+            >
+              Começar agora - É grátis!
+            </PrimaryButton>
+            <p className="text-xs text-indigo-200 mt-2">✅ Sem cartão de crédito • ✅ Ativação imediata</p>
+          </motion.div>
+        </Section>
+
         {/* FEATURES */}
         <Section id="recursos" className="py-12">
-          <h2 className="text-3xl font-bold text-center">Tudo que você precisa para vender seu tempo</h2>
+          <h2 className="text-3xl font-bold text-center">Mais tempo para você, mais valor para seus clientes</h2>
           <p className="text-center text-gray-600 dark:text-gray-300 mt-2">Construído para profissionais independentes e clínicas.</p>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-8">
             <FeatureCard
@@ -337,6 +389,38 @@ const LandingPage: React.FC = () => {
               cardClass="bg-amber-50 text-amber-900 border-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:border-amber-800"
             />
           </div>
+          
+          {/* CTA destacado após recursos - Experimente grátis */}
+          <motion.div 
+            className="mt-12 text-center"
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.3 }}
+            transition={{ duration: 0.5 }}
+          >
+            <div className="inline-block bg-yellow-100 text-yellow-800 px-4 py-2 rounded-full text-sm font-semibold mb-4">
+              💡 Viu como é completo? Teste agora mesmo!
+            </div>
+            <div className="bg-white dark:bg-gray-800 border-2 border-indigo-200 dark:border-indigo-700 rounded-2xl p-8 max-w-md mx-auto shadow-lg">
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                ⏰ 14 dias para testar TUDO
+              </h3>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">
+                Acesso completo a todos os recursos sem pagar nada
+              </p>
+              <PrimaryButton 
+                onClick={() => { window.location.href = '/login?signup=1'; }}
+                className="w-full py-4 text-lg"
+              >
+                Quero testar grátis agora!
+              </PrimaryButton>
+              <div className="flex justify-center gap-4 mt-3 text-xs text-gray-500">
+                <span>✅ Sem cartão</span>
+                <span>✅ Sem compromisso</span>
+                <span>✅ Acesso total</span>
+              </div>
+            </div>
+          </motion.div>
         </Section>
 
         {/* HOW IT WORKS */}
@@ -385,34 +469,35 @@ const LandingPage: React.FC = () => {
             <h2 className="text-3xl font-bold">Planos simples e transparentes</h2>
             <p className="text-gray-600 dark:text-gray-300 mt-2">Comece grátis e faça upgrade quando estiver pronto.</p>
           </div>
-          <div className="grid md:grid-cols-2 gap-6 mt-10">
+          {/* Exemplo de PricingCards (substitua/alinhe onde já existirem) */}
+          <div className="grid sm:grid-cols-2 gap-6 mt-8">
             <PricingCard
               name="Profissional"
-              price="R$ 49"
+              price={PROFESSIONAL_PRICE}
               features={[
-                'Página pública de agendamentos',
-                'Perfil personalizado para profissionais',
-                'Agenda por serviço e exceções',
-                'Receba por Pix e Cartão de Crédito',
-                'E-mails de confirmação',
+                "Página pública de agendamentos",
+                "Perfil personalizado para profissionais",
+                "Agenda por serviço e exceções",
+                "Receba por Pix e Cartão de Crédito",
+                "E-mails de confirmação",
               ]}
               ctaHref="/login?signup=1"
             />
             <PricingCard
               name="Avançado"
-              price="R$ 79"
+              price={ADVANCED_PRICE}
               features={[
-                'Tudo do Profissional',
-                'Análises inteligentes com IA',
-                'Sugestões Financeiras com IA',
-                'Recursos de marketing com IA',
-                'Relatórios avançados',
+                "Tudo do Profissional",
+                "Análises inteligentes com IA",
+                "Sugestões Financeiras com IA",
+                "Recursos de marketing com IA",
+                "Relatórios avançados",
               ]}
               ctaHref="/login?signup=1"
               best
             />
           </div>
-          <p className="text-center text-xs text-gray-500 mt-4">Preços de referência. A cobrança real pode ser configurada no painel.</p>
+          <p className="text-center text-xs text-gray-500 mt-4">Não é necessário cartão de crédito.</p>
         </Section>
 
         {/* FAQ */}
@@ -472,6 +557,25 @@ const LandingPage: React.FC = () => {
         <footer className="py-8 text-center text-sm text-gray-500">
           © {new Date().getFullYear()} Agendiia. Todos os direitos reservados.
         </footer>
+
+        {/* WhatsApp Floating Button */}
+        <div className="fixed bottom-6 right-6 z-50">
+          <a
+            href="https://wa.me/5551981066051?text=Olá! Gostaria de saber mais informações sobre o Agendiia."
+            target="_blank"
+            rel="noopener noreferrer"
+            className="whatsapp-float flex items-center justify-center w-14 h-14 bg-green-500 hover:bg-green-600 text-white rounded-full shadow-lg transition-all duration-300 group"
+            aria-label="Conversar no WhatsApp"
+          >
+            <svg 
+              className="w-8 h-8 group-hover:scale-110 transition-transform duration-200" 
+              fill="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.885 3.488"/>
+            </svg>
+          </a>
+        </div>
       </div>
     </>
   );

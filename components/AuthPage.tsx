@@ -41,12 +41,12 @@ const AuthPage: React.FC = () => {
   }, []);
 
   // If already authenticated, go straight to the app (preserve /admin)
+  // Avoid automatic redirect when auth state changes (prevents clients from
+  // being silently sent to the professional/admin app). Instead show a small
+  // notice and let the user explicitly continue to the panel.
+  const [alreadyLoggedInNotice, setAlreadyLoggedInNotice] = useState(false);
   useEffect(() => {
-    if (user) {
-      const current = window.location.pathname;
-      if (current.startsWith('/admin')) return; // stay, AdminApp will load
-      window.location.href = '/main';
-    }
+    if (user) setAlreadyLoggedInNotice(true);
   }, [user]);
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -107,6 +107,27 @@ const AuthPage: React.FC = () => {
 
         {error && (
           <div className="mb-4 p-3 rounded bg-red-50 text-red-700 text-sm">{error}</div>
+        )}
+
+        {alreadyLoggedInNotice && (
+          <div className="mb-4 p-3 rounded bg-green-50 text-green-700 text-sm">
+            Você já está autenticado.{' '}
+            <button
+              onClick={() => {
+                const target = window.location.pathname.startsWith('/admin') ? '/admin' : '/main';
+                window.location.href = target;
+              }}
+              className="text-indigo-600 hover:underline ml-2"
+            >
+              Ir para o painel
+            </button>
+            <button
+              onClick={async () => { try { await (await import('@/contexts/AuthContext')).useAuth().logout(); } catch {} }}
+              className="ml-4 text-sm text-gray-600 hover:underline"
+            >
+              Sair
+            </button>
+          </div>
         )}
 
         <form onSubmit={onSubmit} className="space-y-3">

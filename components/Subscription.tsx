@@ -16,7 +16,7 @@ const plans = {
   professional: {
     id: 'price_prof_123', // ID do Preço no Stripe
     name: 'Profissional',
-    price: 49.00,
+    price: 39.00,
     features: [
       'Agenda e Agendamentos Ilimitados',
       'Página de Agendamento Pública',
@@ -28,7 +28,7 @@ const plans = {
   advanced: {
     id: 'price_adv_123', // ID do Preço no Stripe
     name: 'Avançado',
-    price: 79.00,
+    price: 59.00,
     features: [
       'Todos os recursos do Profissional',
       'Marketing com IA',

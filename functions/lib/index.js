@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getContentAnalytics = exports.dismissAnnouncement = exports.getActiveAnnouncements = exports.createAnnouncement = exports.getAnnouncements = exports.createWikiPage = exports.getWikiPages = exports.publishLandingPage = exports.createLandingPage = exports.getLandingPages = exports.updateEmailTemplate = exports.createEmailTemplate = exports.getEmailTemplates = exports.getRateLimitStats = exports.monitorResources = exports.createCostAlert = exports.getCostAlerts = exports.getExternalServiceUsage = exports.getResourceViolations = exports.updateUserQuotas = exports.getResourceUsage = exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.reactivateStripeSubscription = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.deletePlatformUser = exports.updatePlatformUser = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.sendDailyReminders = exports.onAppointmentCreated = exports.sendBrevoEmail = exports.createMercadoPagoPreference = void 0;
+exports.getContentAnalytics = exports.dismissAnnouncement = exports.getActiveAnnouncements = exports.createAnnouncement = exports.getAnnouncements = exports.createWikiPage = exports.getWikiPages = exports.publishLandingPage = exports.createLandingPage = exports.getLandingPages = exports.updateEmailTemplate = exports.createEmailTemplate = exports.getEmailTemplates = exports.getRateLimitStats = exports.monitorResources = exports.createCostAlert = exports.getCostAlerts = exports.getExternalServiceUsage = exports.getResourceViolations = exports.updateUserQuotas = exports.getResourceUsage = exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.reactivateStripeSubscription = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.deletePlatformUser = exports.updatePlatformUser = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.debugSendDailyReminders = exports.sendDailyReminders = exports.onAppointmentUpdated = exports.onAppointmentCreated = exports.sendBrevoEmail = exports.createMercadoPagoPreference = void 0;
 exports.finalizeReservationInternal = finalizeReservationInternal;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -189,36 +189,8 @@ exports.sendBrevoEmail = (0, https_1.onCall)({ region: 'us-central1' }, async (r
         throw new https_1.HttpsError('invalid-argument', 'Parâmetros obrigatórios ausentes.');
     }
     try {
-        // Load platform-level Brevo settings
-        const cfgSnap = await admin.firestore().doc('platform/brevo').get();
-        const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-        const apiKey = cfg?.apiKey;
-        const senderEmail = cfg?.senderEmail || 'no-reply@agendiia.app';
-        const senderName = cfg?.senderName || 'Agendiia';
-        if (!apiKey) {
-            throw new https_1.HttpsError('failed-precondition', 'Brevo não configurado.');
-        }
-        const body = {
-            sender: { email: senderEmail, name: senderName },
-            to: [{ email: toEmail, name: toName || toEmail }],
-            subject,
-            htmlContent: html,
-        };
-        const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
-            method: 'POST',
-            headers: {
-                'api-key': apiKey,
-                'content-type': 'application/json',
-                'accept': 'application/json',
-            },
-            body: JSON.stringify(body),
-        });
-        if (!resp.ok) {
-            const t = await resp.text();
-            throw new https_1.HttpsError('internal', `Erro Brevo: ${resp.status} - ${t}`);
-        }
-        const json = await resp.json();
-        return { messageId: json?.messageId || (Array.isArray(json?.messageIds) ? json.messageIds[0] : null) };
+        const messageId = await sendEmailViaBrevo(toEmail, toName || toEmail, subject, html);
+        return { messageId: messageId || null };
     }
     catch (err) {
         if (err instanceof https_1.HttpsError)
@@ -228,18 +200,156 @@ exports.sendBrevoEmail = (0, https_1.onCall)({ region: 'us-central1' }, async (r
 });
 // Firestore trigger: send confirmation email when a new appointment is created
 exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId}/appointments/{appointmentId}', async (event) => {
+    const { userId, appointmentId } = event.params;
+    console.log(`[onAppointmentCreated] Triggered for appointmentId: ${appointmentId} under userId: ${userId}`);
     try {
         const snap = event.data;
-        if (!snap)
+        if (!snap || !snap.exists) {
+            console.log('[onAppointmentCreated] no data, exiting');
             return;
+        }
         const data = snap.data();
+        // ANTI-LOOP: Check if confirmation emails were already sent
+        if (data.confirmationEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
+            console.log(`[onAppointmentCreated] LOOP PREVENTION: Both confirmation emails already sent, skipping.`);
+            return;
+        }
         const clientEmail = data.clientEmail || data.email;
         const clientName = data.clientName || 'Cliente';
+        const serviceName = data.service || 'Atendimento';
+        const dt = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
+        // Resolve professional name and email with fallbacks
+        const db = admin.firestore();
+        const profileSnap = await db.doc(`users/${userId}/profile/main`).get().catch(() => null);
+        let professionalName = profileSnap && profileSnap.exists ? profileSnap.data()?.name : undefined;
+        let profEmail = profileSnap && profileSnap.exists ? profileSnap.data()?.email : undefined;
+        if (!professionalName || !profEmail) {
+            const userDoc = await db.doc(`users/${userId}`).get().catch(() => null);
+            if (userDoc && userDoc.exists) {
+                const ud = userDoc.data();
+                professionalName = professionalName || ud?.name;
+                profEmail = profEmail || ud?.email;
+            }
+        }
+        if (!professionalName || !profEmail) {
+            try {
+                const authRec = await admin.auth().getUser(userId);
+                professionalName = professionalName || authRec.displayName || authRec.email;
+                profEmail = profEmail || authRec.email || undefined;
+            }
+            catch { }
+        }
+        professionalName = professionalName || 'Profissional';
+        // Load templates
+        const autoSnap = await db.doc('platform/automations').get().catch(() => null);
+        let clientSubject = 'Seu agendamento foi confirmado!';
+        let clientBody = 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi realizado com sucesso!';
+        let profSubject = `Novo agendamento: {serviceName}`;
+        let profBodyTemplate = `Olá {professionalName},\n\nVocê recebeu um novo agendamento.\nCliente: {clientName}\nServiço: {serviceName}\nData: {appointmentDate} - {appointmentTime}`;
+        if (autoSnap && autoSnap.exists) {
+            const au = autoSnap.data();
+            const tClient = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_sched') : null;
+            const tProf = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_sched_professional') : null;
+            if (tClient?.subject)
+                clientSubject = tClient.subject;
+            if (tClient?.body)
+                clientBody = tClient.body;
+            if (tProf?.subject)
+                profSubject = tProf.subject;
+            if (tProf?.body)
+                profBodyTemplate = tProf.body;
+        }
+        const vars = {
+            clientName,
+            professionalName,
+            serviceName,
+            appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+            appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+            dateTime: formatDateTimePtBR(dt),
+        };
+        // Send email to client if available
+        if (clientEmail) {
+            try {
+                const html = applyTemplate(clientBody, vars);
+                const subj = applyTemplate(clientSubject, vars);
+                const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+                await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            }
+            catch (err) {
+                console.warn('onAppointmentCreated: failed to send confirmation email to client', err);
+                try {
+                    await snap.ref.set({ confirmationEmailStatus: 'error', confirmationEmailError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                }
+                catch { }
+            }
+        }
+        else {
+            try {
+                await snap.ref.set({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            }
+            catch { }
+        }
+        // Notify professional (best-effort)
+        if (profEmail) {
+            try {
+                const profHtml = applyTemplate(profBodyTemplate, vars);
+                const profSubj = applyTemplate(profSubject, vars);
+                const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubj, profHtml);
+                try {
+                    await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                }
+                catch { }
+            }
+            catch (err) {
+                console.warn('onAppointmentCreated: failed to notify professional', err);
+                try {
+                    await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                }
+                catch { }
+            }
+        }
+        else {
+            try {
+                await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            }
+            catch { }
+        }
+    }
+    catch (e) {
+        console.error('[onAppointmentCreated] top-level error', e);
+    }
+});
+exports.onAppointmentUpdated = (0, firestore_1.onDocumentUpdated)('users/{userId}/appointments/{appointmentId}', async (event) => {
+    const { userId, appointmentId } = event.params;
+    console.log(`[onAppointmentUpdated] Triggered for appointmentId: ${appointmentId} under userId: ${userId}`);
+    try {
+        const snap = event.data?.after;
+        if (!snap || !snap.exists) {
+            console.log(`[onAppointmentUpdated] No data found for event or document deleted. Exiting.`);
+            return;
+        }
+        const data = snap.data();
+        console.log(`[onAppointmentUpdated] Appointment data:`, JSON.stringify(data, null, 2));
+        // ANTI-LOOP: Check if this update was caused by our own email status updates
+        const before = event.data?.before?.data();
+        const hasNewEmailStatus = data.updateEmailStatus && (!before || before.updateEmailStatus !== data.updateEmailStatus);
+        const hasNewProfNotificationStatus = data.professionalNotificationStatus && (!before || before.professionalNotificationStatus !== data.professionalNotificationStatus);
+        if (hasNewEmailStatus || hasNewProfNotificationStatus) {
+            console.log(`[onAppointmentUpdated] LOOP PREVENTION: Skipping execution because this update was triggered by email status change.`);
+            return;
+        }
+        // Additional check: if both emails were already sent, skip
+        if (data.updateEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
+            console.log(`[onAppointmentUpdated] LOOP PREVENTION: Both emails already sent, skipping.`);
+            return;
+        }
+        const clientEmail = data.clientEmail || data.email;
+        const clientName = data.clientName || 'Cliente';
+        console.log(`[onAppointmentUpdated] Extracted clientEmail: "${clientEmail}" and clientName: "${clientName}"`);
         // Prossegue mesmo sem email do cliente para tentar notificar o profissional
         const serviceName = data.service || 'Atendimento';
         const dt = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
         // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
-        const userId = event.params.userId;
         const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
         let professionalName = userProfileSnap.exists ? userProfileSnap.data()?.name : undefined;
         if (!professionalName) {
@@ -249,7 +359,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                 professionalName = userDoc && userDoc.exists ? userDoc.data()?.name : undefined;
             }
             catch (e) {
-                console.warn('onAppointmentCreated - failed to read users/{userId} for professional name fallback', e);
+                console.warn('onAppointmentUpdated - failed to read users/{userId} for professional name fallback', e);
             }
         }
         if (!professionalName) {
@@ -266,8 +376,8 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         // Load template
         const autoSnap = await admin.firestore().doc('platform/automations').get();
         const defaults = {
-            subject: 'Seu agendamento foi confirmado!',
-            body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi realizado com sucesso!',
+            subject: 'Seu agendamento foi atualizado!',
+            body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi atualizado com sucesso!',
         };
         let subject = defaults.subject;
         let body = defaults.body;
@@ -296,14 +406,17 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         vars['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
         vars['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
         if (clientEmail) {
+            console.log(`[onAppointmentUpdated] Client email found. Preparing to send update notification to ${clientEmail}.`);
             const html = applyTemplate(body, vars);
             const subj = applyTemplate(subject, vars);
             const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+            console.log(`[onAppointmentUpdated] Email sent to client. Message ID: ${msgId}`);
             // email do cliente enviado
-            await snap.ref.update({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            await snap.ref.update({ updateEmailStatus: 'sent', updateEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         else {
-            await snap.ref.update({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            console.log(`[onAppointmentUpdated] Client email not found. Skipping email to client.`);
+            await snap.ref.update({ updateEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         }
         // Also notify the professional via email (try multiple fallbacks for email)
         try {
@@ -319,7 +432,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                     }
                 }
                 catch (e) {
-                    console.warn('onAppointmentCreated - falha ao ler users/{userId} para fallback de email', e);
+                    console.warn('onAppointmentUpdated - falha ao ler users/{userId} para fallback de email', e);
                 }
             }
             // fallback 2: Firebase Auth
@@ -329,7 +442,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                     profEmail = authRec?.email || profEmail;
                 }
                 catch (e) {
-                    console.warn('onAppointmentCreated - falha ao obter auth record para fallback de email', e);
+                    console.warn('onAppointmentUpdated - falha ao obter auth record para fallback de email', e);
                 }
             }
             // fallback 3 (último recurso): se ainda não houver email, não envia
@@ -338,7 +451,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                 const autoData = autoSnap.exists ? autoSnap.data() : null;
                 const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t) => t.id === 't_sched_professional') : null;
                 const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars);
-                const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Você recebeu um novo agendamento.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
+                const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Seu agendamento foi atualizado.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
                 // Garantir que variáveis críticas existam
                 if (!vars.appointmentDate)
                     vars.appointmentDate = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -353,7 +466,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
                     await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
                 }
                 catch (w) {
-                    console.warn('onAppointmentCreated - falha ao registrar status do email do profissional', w);
+                    console.warn('onAppointmentUpdated - falha ao registrar status do email do profissional', w);
                 }
             }
             else {
@@ -372,39 +485,123 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         }
     }
     catch (e) {
-        console.warn('onAppointmentCreated email error', e);
+        console.error(`[onAppointmentUpdated] Top-level error for appointmentId: ${appointmentId}`, e);
     }
 });
 // Scheduled reminder ~24h before: runs hourly, sends for items within 23.5h-24.5h from now and not yet reminded
-exports.sendDailyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 60 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async () => {
+exports.sendDailyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 60 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async (event) => {
     const now = new Date();
     const in23_5h = new Date(now.getTime() + 23.5 * 3600 * 1000);
     const in24_5h = new Date(now.getTime() + 24.5 * 3600 * 1000);
+    const db = admin.firestore();
+    const tsStart = admin.firestore.Timestamp.fromDate(in23_5h);
+    const tsEnd = admin.firestore.Timestamp.fromDate(in24_5h);
+    console.log(`[${event.jobName}] V4 START: Range: ${tsStart.toDate().toISOString()} to ${tsEnd.toDate().toISOString()}`);
+    let appointmentDocs = [];
+    // TEMPORARY: Use only fallback until indices are built
+    console.log(`[${event.jobName}] V4 USING_FALLBACK_ONLY: CollectionGroup disabled temporarily.`);
     try {
-        const db = admin.firestore();
-        const qs = await db.collectionGroup('appointments')
-            .where('dateTime', '>=', in23_5h)
-            .where('dateTime', '<=', in24_5h)
-            .get();
-        const batch = db.batch();
-        for (const docSnap of qs.docs) {
-            const ap = docSnap.data();
-            if (ap.reminder24hSent || (ap.status && ap.status !== 'Agendado'))
-                continue;
-            const email = ap.clientEmail || ap.email;
-            if (!email)
-                continue;
-            const name = ap.clientName || 'Cliente';
-            const serviceName = ap.service || 'Atendimento';
-            const dt = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
-            // Fetch professional's name
-            const userId = docSnap.ref.path.split('/')[1];
+        const usersSnapshot = await db.collection('users').get();
+        console.log(`[${event.jobName}] V4 FALLBACK_INFO: Scanning ${usersSnapshot.size} users.`);
+        const promises = usersSnapshot.docs.map(userDoc => db.collection(`users/${userDoc.id}/appointments`)
+            .where('dateTime', '>=', tsStart)
+            .where('dateTime', '<=', tsEnd)
+            .get()
+            .then(userAppointments => {
+            if (!userAppointments.empty) {
+                console.log(`[${event.jobName}] V4 FALLBACK_USER_SUCCESS: Found ${userAppointments.size} for user ${userDoc.id}`);
+                return userAppointments.docs;
+            }
+            return [];
+        })
+            .catch(userErr => {
+            console.warn(`[${event.jobName}] V4 CATCH_FALLBACK_USER: Failed for user ${userDoc.id}`, userErr);
+            return [];
+        }));
+        const results = await Promise.all(promises);
+        appointmentDocs = results.flat();
+        console.log(`[${event.jobName}] V4 SUCCESS_FALLBACK: Fallback scan finished. Total appointments: ${appointmentDocs.length}`);
+    }
+    catch (fallbackErr) {
+        console.error(`[${event.jobName}] V4 CATCH_FALLBACK: The entire fallback scan failed.`, fallbackErr);
+        return;
+    }
+    if (appointmentDocs.length === 0) {
+        console.log(`[${event.jobName}] V4 END: No appointments found. Job finished.`);
+        return;
+    }
+    let processedCount = 0;
+    // Aggregated skip counters for diagnostics
+    const skipCounters = {
+        alreadySent: 0,
+        statusNotAgendado: 0,
+        missingEmail: 0,
+        invalidDate: 0,
+        ok: 0,
+    };
+    for (const docSnap of appointmentDocs) {
+        const ap = docSnap.data();
+        if (ap.reminder24hSent) {
+            skipCounters.alreadySent++;
+            continue;
+        }
+        if (ap.status && ap.status !== 'Agendado') {
+            skipCounters.statusNotAgendado++;
+            continue;
+        }
+        const email = ap.clientEmail || ap.email;
+        if (!email) {
+            skipCounters.missingEmail++;
+            continue;
+        }
+        // Validate/normalize dateTime
+        let dt = null;
+        try {
+            const raw = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+            if (raw && !isNaN(raw.getTime()))
+                dt = raw;
+            else
+                dt = null;
+        }
+        catch {
+            dt = null;
+        }
+        if (!dt) {
+            skipCounters.invalidDate++;
+            continue;
+        }
+        const name = ap.clientName || 'Cliente';
+        const serviceName = ap.service || 'Atendimento';
+        const userId = docSnap.ref.path.split('/')[1];
+        // Try to acquire a short-lived transactional lock so overlapping scheduler runs don't both send the same reminder
+        const docRef = docSnap.ref;
+        let acquired = false;
+        try {
+            await db.runTransaction(async (tx) => {
+                const cur = await tx.get(docRef);
+                const curData = cur.exists ? cur.data() : {};
+                if (curData.reminder24hSent)
+                    return; // already sent
+                if (curData.reminder24hSending)
+                    return; // someone else is processing
+                tx.update(docRef, { reminder24hSending: admin.firestore.FieldValue.serverTimestamp() });
+                acquired = true;
+            }, { maxAttempts: 1 });
+        }
+        catch (tErr) {
+            console.warn(`[${event.jobName}] V4 LOCK_FAIL: Could not acquire lock for ${docSnap.id}`, tErr);
+            acquired = false;
+        }
+        if (!acquired) {
+            skipCounters.alreadySent++;
+            continue;
+        }
+        try {
             const userDoc = await db.doc(`users/${userId}`).get();
             const professionalName = userDoc.exists ? userDoc.data()?.name || 'Seu Profissional' : 'Seu Profissional';
-            // Load template (once would be better, but keep simple)
             const autoSnap = await db.doc('platform/automations').get();
             let subject = 'Lembrete do seu agendamento';
-            let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {date}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {time}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
+            let body = `Olá {clientName},<br/><br/>Lembramos que você tem uma consulta agendada para amanhã.<br/>📅 Detalhes da Consulta:<br/><br/>&nbsp;&nbsp;&nbsp;&nbsp;Profissional: {professionalName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Serviço: {serviceName}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Data: {data}<br/>&nbsp;&nbsp;&nbsp;&nbsp;Horário: {horário}<br/><br/>Se precisar reagendar ou cancelar, entre em contato conosco.<br/><br/>Atenciosamente,<br/>{professionalName}`;
             if (autoSnap.exists) {
                 const au = autoSnap.data();
                 const tmpl = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_remind') : null;
@@ -419,27 +616,158 @@ exports.sendDailyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 60 m
                 'nome do serviço': serviceName,
                 'data': dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
                 'horário': dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
-                // Manter compatibilidade com variáveis antigas
-                clientName: name,
-                serviceName,
-                dateTime: formatDateTimePtBR(dt),
+                clientName: name, serviceName, dateTime: formatDateTimePtBR(dt),
                 date: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
                 time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
                 professionalName,
             };
+            await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+            // Mark sent and clear sending flag
             try {
-                await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
-                batch.update(docSnap.ref, { reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp() });
+                await docRef.update({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() });
             }
-            catch (e) {
-                console.warn('Reminder email failed for', docSnap.ref.path, e);
+            catch (w) {
+                console.warn(`[${event.jobName}] V4 WARNING: Failed to update sent flag for ${docSnap.id}`, w);
+            }
+            processedCount++;
+            skipCounters.ok++;
+            console.log(`[${event.jobName}] V4 PROCESS_SUCCESS: Sent reminder for appointment ${docSnap.id} to ${email}.`);
+        }
+        catch (e) {
+            console.error(`[${event.jobName}] V4 PROCESS_FAIL: Error on appointment ${docSnap.id}.`, e);
+            // Clear sending flag so future runs can retry
+            try {
+                await docRef.update({ reminder24hSending: admin.firestore.FieldValue.delete(), reminder24hError: e?.message || String(e), reminder24hErrorAt: admin.firestore.FieldValue.serverTimestamp() });
+            }
+            catch (u) {
+                console.warn('Failed to clear reminder24hSending after error', u);
             }
         }
-        await batch.commit();
+    }
+    console.log(`[${event.jobName}] V4 SKIP_SUMMARY:`, JSON.stringify(skipCounters));
+    console.log(`[${event.jobName}] V4 PROCESSED_COUNT: ${processedCount}`);
+    if (processedCount === 0) {
+        console.log(`[${event.jobName}] V4 END: No valid reminders to send.`);
+    }
+    console.log(`[${event.jobName}] V4 END: Job finished.`);
+});
+// Callable debug helper: allows testing the reminder logic with a custom window and optional dry run
+exports.debugSendDailyReminders = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
+    const { minutesFrom = 1410, minutesTo = 1470, execute = false } = (req.data || {}); // default ~23.5h-24.5h
+    if (minutesFrom >= minutesTo)
+        throw new https_1.HttpsError('invalid-argument', 'minutesFrom deve ser < minutesTo');
+    const now = new Date();
+    const start = new Date(now.getTime() + minutesFrom * 60000);
+    const end = new Date(now.getTime() + minutesTo * 60000);
+    const db = admin.firestore();
+    const tsStart = admin.firestore.Timestamp.fromDate(start);
+    const tsEnd = admin.firestore.Timestamp.fromDate(end);
+    const out = { window: { start: tsStart.toDate().toISOString(), end: tsEnd.toDate().toISOString() }, found: 0, processed: 0, skips: {}, dryRun: !execute, details: [] };
+    try {
+        const qs = await db.collectionGroup('appointments')
+            .where('dateTime', '>=', tsStart)
+            .where('dateTime', '<=', tsEnd)
+            .get();
+        out.found = qs.size;
+        const skipCounters = { alreadySent: 0, statusNotAgendado: 0, missingEmail: 0, invalidDate: 0 };
+        for (const docSnap of qs.docs) {
+            const ap = docSnap.data();
+            const info = { id: docSnap.id };
+            if (ap.reminder24hSent) {
+                skipCounters.alreadySent++;
+                info.skip = 'alreadySent';
+                out.details.push(info);
+                continue;
+            }
+            if (ap.status && ap.status !== 'Agendado') {
+                skipCounters.statusNotAgendado++;
+                info.skip = 'statusNotAgendado';
+                out.details.push(info);
+                continue;
+            }
+            const email = ap.clientEmail || ap.email;
+            if (!email) {
+                skipCounters.missingEmail++;
+                info.skip = 'missingEmail';
+                out.details.push(info);
+                continue;
+            }
+            let dt = null;
+            try {
+                const raw = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+                if (raw && !isNaN(raw.getTime()))
+                    dt = raw;
+                else
+                    dt = null;
+            }
+            catch {
+                dt = null;
+            }
+            if (!dt) {
+                skipCounters.invalidDate++;
+                info.skip = 'invalidDate';
+                out.details.push(info);
+                continue;
+            }
+            info.email = email;
+            if (!execute) {
+                out.details.push(info);
+                continue;
+            }
+            // Acquire transactional lock similar to production path
+            const docRef = docSnap.ref;
+            let acquired = false;
+            try {
+                await db.runTransaction(async (tx) => {
+                    const cur = await tx.get(docRef);
+                    const curData = cur.exists ? cur.data() : {};
+                    if (curData.reminder24hSent)
+                        return;
+                    if (curData.reminder24hSending)
+                        return;
+                    tx.update(docRef, { reminder24hSending: admin.firestore.FieldValue.serverTimestamp() });
+                    acquired = true;
+                }, { maxAttempts: 1 });
+            }
+            catch (tErr) {
+                acquired = false;
+            }
+            if (!acquired) {
+                info.skip = 'locked';
+                out.details.push(info);
+                continue;
+            }
+            try {
+                const userId = docSnap.ref.path.split('/')[1];
+                const userDoc = await db.doc(`users/${userId}`).get();
+                const professionalName = userDoc.exists ? userDoc.data()?.name || 'Seu Profissional' : 'Seu Profissional';
+                const name = ap.clientName || 'Cliente';
+                const serviceName = ap.service || 'Atendimento';
+                const subject = 'TESTE Lembrete (debug)';
+                const body = `Debug: agendamento em ${dt.toISOString()} para {clientName}`;
+                const vars = { clientName: name };
+                await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+                await docSnap.ref.set({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() }, { merge: true });
+                out.processed++;
+                info.sent = true;
+                out.details.push(info);
+            }
+            catch (e) {
+                info.error = e?.message || String(e);
+                // Clear sending marker on error so retries can happen
+                try {
+                    await docSnap.ref.update({ reminder24hSending: admin.firestore.FieldValue.delete(), reminder24hError: info.error, reminder24hErrorAt: admin.firestore.FieldValue.serverTimestamp() });
+                }
+                catch { }
+                out.details.push(info);
+            }
+        }
+        out.skips = skipCounters;
     }
     catch (e) {
-        console.warn('sendDailyReminders error', e);
+        throw new https_1.HttpsError('internal', e?.message || 'Erro debug reminders');
     }
+    return out;
 });
 // One-off callable to apply CORS configuration to the default Storage bucket
 exports.applyStorageCors = (0, https_1.onCall)({ region: 'us-central1' }, async () => {
@@ -2309,6 +2637,7 @@ exports.getRateLimitStats = (0, https_1.onCall)(async (request) => {
     const { auth } = request;
     if (!auth?.uid)
         throw new https_1.HttpsError('unauthenticated', 'Authentication required');
+    // Apply admin rate limiting
     await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getRateLimitStats', rateLimiter_1.adminRateLimiter);
     await assertIsPlatformAdmin(auth.uid);
     try {
@@ -2794,10 +3123,15 @@ exports.getContentAnalytics = (0, https_1.onCall)(async (request) => {
                 averageDismissalRate: announcements.length > 0
                     ? announcements.reduce((sum, a) => sum + (a.dismissedBy?.length || 0), 0) / announcements.length
                     : 0,
-                typeStats: announcements.reduce((acc, a) => {
-                    acc[a.type] = (acc[a.type] || 0) + 1;
-                    return acc;
-                }, {})
+                topPerforming: announcements
+                    .filter(a => a.viewCount)
+                    .sort((a, b) => b.viewCount - a.viewCount)
+                    .slice(0, 5)
+                    .map(a => ({
+                    id: a.id,
+                    title: a.title,
+                    views: a.viewCount
+                }))
             }
         };
         return analytics;

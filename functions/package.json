@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@google-cloud/billing": "^5.1.0",
     "firebase-admin": "^12.6.0",
     "firebase-functions": "^6.0.0",
     "stripe": "^14.0.0"

@@ -30,7 +30,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
-  logout: () => Promise<void>;
+  logout: (redirect?: boolean) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   sendVerification: () => Promise<void>;
   reloadUser: () => Promise<void>;
@@ -183,8 +183,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const logout = async () => {
+  const logout = async (redirect = true) => {
     await signOut(auth);
+    // After signOut, replace the current history entry with /login so the
+    // address bar updates and the protected route isn't left in history.
+    try {
+      if (redirect && typeof window !== 'undefined') {
+        window.location.replace('/login');
+      }
+    } catch (e) {
+      // ignore navigation failures
+    }
   };
 
   const resetPassword = async (email: string) => {
