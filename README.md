@@ -36,3 +36,7 @@ Exemplo:
 ```
 import { auth, db } from '@/services/firebase';
 ```
+# Meu Projeto no GitHub
+
+Este projeto é parte do app de agendamentos.  
+Visite: [Agendiia - Agendamento Online](https://agendiia.com.br/)
