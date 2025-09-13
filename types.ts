@@ -349,6 +349,7 @@ export interface PlatformUser {
     id: string;
     name: string;
     email: string;
+    phone?: string;
     plan: 'Profissional' | 'Avançado' | 'Trial';
     status: UserStatus;
     joinDate: Date;

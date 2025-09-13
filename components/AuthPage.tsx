@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { applyActionCode } from 'firebase/auth';
 import { Eye, EyeOff } from './Icons';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -25,6 +26,7 @@ const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -45,9 +47,43 @@ const AuthPage: React.FC = () => {
   // being silently sent to the professional/admin app). Instead show a small
   // notice and let the user explicitly continue to the panel.
   const [alreadyLoggedInNotice, setAlreadyLoggedInNotice] = useState(false);
+  const [actionInfo, setActionInfo] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   useEffect(() => {
     if (user) setAlreadyLoggedInNotice(true);
   }, [user]);
+
+  // Process Firebase action links (oobCode). If the user opens /login?mode=verifyEmail&oobCode=...
+  // we will attempt to apply the action and then redirect to /login (clean URL) so the user
+  // sees the login screen after verification.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode');
+      const oobCode = params.get('oobCode');
+      if (mode === 'verifyEmail' && oobCode) {
+        (async () => {
+          setActionInfo('Verificando email...');
+          try {
+            await applyActionCode((await import('../services/firebase')).auth, oobCode);
+            setActionInfo('Seu e-mail foi verificado. Redirecionando para login...');
+            // Remove query params and replace history so user lands on clean /login
+            setTimeout(() => {
+              try { window.location.replace('/login'); } catch { window.location.href = '/login'; }
+            }, 900);
+          } catch (err: any) {
+            setActionError(err?.message ?? 'Falha ao verificar o e-mail.');
+            // Still navigate to /login without the action params after a short delay so user can retry
+            setTimeout(() => {
+              try { window.location.replace('/login'); } catch { window.location.href = '/login'; }
+            }, 2000);
+          }
+        })();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +91,8 @@ const AuthPage: React.FC = () => {
     setError(null);
     try {
       if (isRegister) {
-        await register(name.trim(), email.trim(), password);
+        // pass phone to register; cast to any to avoid TS signature mismatch if register has different typing
+        await (register as any)(name.trim(), email.trim(), password, phone.trim());
       } else {
         await login(email.trim(), password);
       }
@@ -135,6 +172,18 @@ const AuthPage: React.FC = () => {
             <div>
               <label className="block text-sm mb-1">Nome</label>
               <Input placeholder="Seu nome" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+          )}
+          {isRegister && (
+            <div>
+              <label className="block text-sm mb-1">Telefone</label>
+              <Input
+                type="tel"
+                placeholder="(XX) 9XXXX-XXXX"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                required
+              />
             </div>
           )}
           <div>

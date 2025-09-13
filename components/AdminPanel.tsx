@@ -158,6 +158,7 @@ const AdminPanel: React.FC = () => {
                 userData: {
                     name: userToSave.name,
                     email: userToSave.email,
+                    phone: userToSave.phone,
                     plan: userToSave.plan,
                     status: userToSave.status
                 }
@@ -308,6 +309,7 @@ const AdminPanel: React.FC = () => {
                     id: d.id,
                     name: data.name || data.displayName || 'Sem nome',
                     email: data.email || '',
+                    phone: data.phone || '',
                     plan: (data.plan || 'Profissional'),
                     status: (data.status as UserStatus) || UserStatus.Active,
                     joinDate: created,
@@ -439,7 +441,7 @@ const AdminPanel: React.FC = () => {
 
     // Global search filtering
     const term = globalSearch.trim().toLowerCase();
-    const filteredUsers = term ? users.filter(u => [u.name, u.email, u.plan].some(f => f.toLowerCase().includes(term))) : users;
+    const filteredUsers = term ? users.filter(u => [u.name, u.email, u.plan, u.phone].some(f => f && f.toLowerCase().includes(term))) : users;
     const filteredTransactions = term ? transactions.filter(t => [t.id, t.userName, t.description, t.gateway, t.status].some(f => String(f).toLowerCase().includes(term))) : transactions;
     const filteredCoupons = term ? coupons.filter(c => [c.code, c.discountPercent, c.timesUsed].some(f => String(f).toLowerCase().includes(term))) : coupons;
     const filteredPlans = term ? plans.filter(p => [p.name, p.price].some(f => String(f).toLowerCase().includes(term))) : plans;
@@ -808,6 +810,7 @@ const UserManagement: React.FC<{ users: PlatformUser[], onEdit: (user: PlatformU
                             <td className="p-3">
                                 <div className="font-medium text-gray-800 dark:text-white">{user.name}</div>
                                 <div className="text-sm text-gray-500 dark:text-gray-400">{user.email}</div>
+                                <div className="text-sm text-gray-500 dark:text-gray-400">{user.phone}</div>
                             </td>
                             <td className="p-3 text-gray-600 dark:text-gray-300">{user.plan}</td>
                             <td className="p-3"><StatusBadge status={user.status} tooltipText={userStatusTooltips[user.status]} /></td>
@@ -1227,6 +1230,7 @@ const UserModal: React.FC<{ user: PlatformUser | null, onSave: (user: PlatformUs
             <div className="space-y-4">
                 <InputSetting label="Nome" name="name" value={formData.name} onChange={handleChange} />
                 <InputSetting label="Email" name="email" value={formData.email} onChange={handleChange} />
+                <InputSetting label="Telefone" name="phone" value={formData.phone || ''} onChange={handleChange} />
                 <SelectSetting label="Plano" name="plan" value={formData.plan} onChange={handleChange} options={['Trial', 'Profissional', 'Avançado']} />
                 <SelectSetting label="Status" name="status" value={formData.status} onChange={handleChange} options={Object.values(UserStatus)} />
                 <div className="p-3 border rounded-md bg-gray-50 dark:bg-gray-700/30 space-y-3">

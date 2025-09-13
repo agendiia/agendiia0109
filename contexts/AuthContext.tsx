@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { auth, db } from '@/services/firebase';
 import {
@@ -16,7 +15,7 @@ import {
   reload,
   type User,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 type SubscriptionPlanName = 'Profissional' | 'Avançado';
 
@@ -146,21 +145,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await signInWithEmailAndPassword(auth, email, password);
   };
 
-  const register = async (name: string, email: string, password: string) => {
+  const register = async (name: string, email: string, password: string, phone?: string) => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
-    if (name) {
-      try { await updateProfile(cred.user, { displayName: name }); } catch {}
-    }
-    try {
-      await setDoc(doc(db, 'users', cred.user.uid), {
-        name,
-        email,
-        plan: 'Profissional',
-        createdAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch {}
-  // Best practice: enviar email de verificação após cadastro
-  try { await sendEmailVerification(cred.user); } catch {}
+    // atualiza displayName
+    await updateProfile(cred.user, { displayName: name || '' });
+    // envia verificação por email (se desejado)
+    await sendEmailVerification(cred.user);
+    // cria documento do usuário com telefone
+    await setDoc(doc(db, 'users', cred.user.uid), {
+      uid: cred.user.uid,
+      name: name || '',
+      email: email || '',
+      phone: phone || null,
+      createdAt: serverTimestamp(),
+      welcomeEmailSent: false
+    });
+    return cred;
   };
 
   const loginWithGoogle = async () => {

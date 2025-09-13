@@ -29,6 +29,36 @@ const path = window.location.pathname;
 let componentToRender;
 
 // Simple router
+// Special-case: Firebase Auth action handler path. When users click the verification
+// link Firebase may land them on /__/auth/action with query params (mode, oobCode).
+// Detect that and attempt to apply the action code, then redirect to /login.
+if (path.startsWith('/__/auth/action')) {
+  (async () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get('mode');
+      const oobCode = params.get('oobCode');
+      if (mode === 'verifyEmail' && oobCode) {
+        // dynamic import to avoid top-level firebase/auth import duplication
+        const [{ applyActionCode }, { auth }] = await Promise.all([
+          import('firebase/auth'),
+          import('./services/firebase')
+        ]);
+        try {
+          await applyActionCode(auth, oobCode);
+        } catch (err) {
+          // ignore error; we'll still redirect to login so user can sign in or retry
+        }
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      try { window.location.replace('/login'); } catch { window.location.href = '/login'; }
+    }
+  })();
+  // short-circuit rendering; the page will redirect shortly
+  componentToRender = <div />;
+}
 if (path.startsWith('/admin')) {
     componentToRender = (
       <AuthProvider>
