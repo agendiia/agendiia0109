@@ -5,6 +5,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import Stripe from 'stripe';
 import * as admin from 'firebase-admin';
+import * as nodemailer from 'nodemailer';
 import { 
   PlatformMetrics, 
   ResourceUsage, 
@@ -23,45 +24,227 @@ import { userRateLimiter, adminRateLimiter, applyRateLimit, checkPlanLimits } fr
 
 admin.initializeApp();
 
-// Small server-side email sender using Brevo settings in Firestore
-// BREVO INTEGRATION DISABLED TO PREVENT EMAIL LOOP.
-async function sendEmailViaBrevo(toEmail: string, toName: string, subject: string, html: string): Promise<string> {
-  const ref = admin.firestore().doc('platform_settings/brevo');
-  const snap = await ref.get();
-  if (!snap.exists) {
-    console.error('Brevo settings not found');
-    throw new HttpsError('failed-precondition', 'Brevo settings not found');
-  }
-  const settings = snap.data() as any;
-  const apiKey = settings.apiKey;
-  const fromName = settings.fromName || 'Agendiia';
-  const fromEmail = settings.fromEmail || 'nao-responda@agendiia.com.br';
-
-  const body = {
-    sender: { name: fromName, email: fromEmail },
-    to: [{ email: toEmail, name: toName }],
-    subject,
-    htmlContent: html,
+// --- WhatsApp (W-API) helpers ---
+type WhatsAppConfig = {
+  enabled?: boolean;
+  provider?: 'ultramsg' | 'custom' | string;
+  wapi?: {
+    baseUrl?: string; // e.g. https://api.ultramsg.com/<instanceId>
+    token?: string;   // provider token / apiKey
+    instanceId?: string; // optional
+    chatEndpoint?: string; // e.g. /messages/chat
+    method?: string; // default POST
+    headers?: Record<string, string>;
+    useForm?: boolean; // form-urlencoded for some providers
+    bodyTemplate?: string; // for custom provider; supports {to} and {message}
+    phonePrefix?: string; // e.g. '55'
   };
+};
 
-  const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'api-key': apiKey,
-      'content-type': 'application/json',
-      'accept': 'application/json',
-    },
-    body: JSON.stringify(body),
+function onlyDigits(s: string): string {
+  return (s || '').replace(/\D+/g, '');
+}
+
+function normalizePhone(raw: string, prefix?: string): string {
+  const d = onlyDigits(raw);
+  if (!d) return '';
+  if (prefix && !d.startsWith(prefix)) return prefix + d;
+  return d;
+}
+
+async function getWhatsAppConfig(): Promise<WhatsAppConfig> {
+  const snap = await admin.firestore().doc('platform/settings').get();
+  const data = snap.exists ? (snap.data() as any) : {};
+  return (data.whatsapp || {}) as WhatsAppConfig;
+}
+
+async function sendWhatsAppViaWapi(toPhone: string, message: string): Promise<{ ok: boolean; response?: any }>{
+  const cfg = await getWhatsAppConfig();
+  if (!cfg?.enabled) throw new HttpsError('failed-precondition', 'WhatsApp não habilitado (platform/settings.whatsapp.enabled=false)');
+  const wapi = cfg.wapi || {};
+  const baseUrl = (wapi.baseUrl || '').replace(/\/$/, '');
+  const token = wapi.token || '';
+  if (!baseUrl || !token) throw new HttpsError('failed-precondition', 'Configuração W-API incompleta (baseUrl/token)');
+
+  const to = normalizePhone(toPhone, wapi.phonePrefix || '55');
+  if (!to) throw new HttpsError('invalid-argument', 'Número de telefone inválido');
+
+  const provider = (cfg.provider || 'custom').toLowerCase();
+  const chatEndpoint = wapi.chatEndpoint || (provider === 'ultramsg' ? '/messages/chat' : '/');
+  const method = (wapi.method || 'POST').toUpperCase();
+  const headers: Record<string, string> = Object.assign({}, wapi.headers || {});
+
+  let url = baseUrl + chatEndpoint;
+  let body: any;
+
+  if (provider === 'ultramsg') {
+    // UltraMsg expects token, to, body. Often application/x-www-form-urlencoded
+    const useForm = wapi.useForm !== false; // default true for UltraMsg
+    if (useForm) {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/x-www-form-urlencoded';
+      const params = new URLSearchParams();
+      params.append('token', token);
+      params.append('to', to);
+      params.append('body', message);
+      body = params.toString();
+    } else {
+      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+      body = JSON.stringify({ token, to, body: message });
+    }
+  } else {
+    // Custom provider: allow bodyTemplate or generic JSON {token,to,message}
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+    if (wapi.bodyTemplate) {
+      const tmpl = wapi.bodyTemplate as string;
+      const payload = tmpl.replace(/\{to\}/g, to).replace(/\{message\}/g, message).replace(/\{token\}/g, token);
+      try { body = JSON.parse(payload); } catch { body = payload; }
+    } else {
+      body = JSON.stringify({ token, to, message });
+    }
+  }
+
+  const resp = await fetch(url, { method, headers, body });
+  const txt = await resp.text();
+  if (!resp.ok) {
+    throw new HttpsError('internal', `W-API falhou (${resp.status}): ${txt.slice(0, 500)}`);
+  }
+  let json: any = null; try { json = JSON.parse(txt); } catch { /* keep text */ }
+  return { ok: true, response: json || txt };
+}
+
+// WhatsApp diagnostics (config validation only)
+export const diagnoseWhatsApp = onCall({ region: 'us-central1' }, async () => {
+  const cfg = await getWhatsAppConfig();
+  const wapi = cfg?.wapi || {};
+  const ok = !!(cfg?.enabled && wapi.baseUrl && wapi.token);
+  const provider = cfg?.provider || 'custom';
+  return { ok, provider, hasBaseUrl: !!wapi.baseUrl, hasToken: !!wapi.token };
+});
+
+// Callable: send a WhatsApp message via W-API
+export const sendWhatsAppMessage = onCall({ region: 'us-central1' }, async (req) => {
+  const { to, message } = (req.data || {}) as { to?: string; message?: string };
+  if (!to || !message) throw new HttpsError('invalid-argument', 'Parâmetros to e message são obrigatórios');
+  const result = await sendWhatsAppViaWapi(to, message);
+  return { ok: result.ok, response: result.response };
+});
+
+// Diagnostics: send a test WA message
+export const sendWhatsAppDiagnostics = onCall({ region: 'us-central1' }, async (req) => {
+  const { to } = (req.data || {}) as { to?: string };
+  if (!to) throw new HttpsError('invalid-argument', 'Informe o telefone de destino');
+  const message = 'Diagnóstico de WhatsApp (W-API) - Agendiia';
+  const result = await sendWhatsAppViaWapi(to, message);
+  return { ok: true, response: result.response };
+});
+// Email sender - SMTP (Hostinger) only
+async function sendEmail(toEmail: string, toName: string, subject: string, html: string): Promise<string> {
+  const platformSettings = await admin.firestore().doc('platform/settings').get();
+  const settingsData = platformSettings.exists ? (platformSettings.data() as any) : {};
+  const smtpConfig = settingsData.smtp;
+  console.log('[sendEmail] SMTP-only start', {
+    toEmail,
+    useSmtp: !!(smtpConfig && smtpConfig.host && smtpConfig.user && smtpConfig.pass),
   });
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error('Brevo API error:', text);
-    throw new HttpsError('internal', `Brevo API error: ${text}`);
+  if (smtpConfig && smtpConfig.host && smtpConfig.user && smtpConfig.pass) {
+    return await sendEmailViaSMTP(toEmail, toName, subject, html, smtpConfig);
   }
-  const json: any = await resp.json();
-  return json.messageId;
+  throw new HttpsError('failed-precondition', 'SMTP não configurado. Defina platform/settings.smtp (host, user, pass, fromEmail).');
 }
+
+// SMTP implementation for Hostinger
+async function sendEmailViaSMTP(toEmail: string, toName: string, subject: string, html: string, settings: any): Promise<string> {
+  const { host, port, secure, user, pass, fromName, fromEmail } = settings;
+  
+  if (!host || !user || !pass) {
+    throw new HttpsError('failed-precondition', 'Configuração SMTP incompleta');
+  }
+
+  // nodemailer API: createTransport
+  const transporter = nodemailer.createTransport({
+    host: host,
+    port: port || 587,
+    secure: secure || false, // true for 465, false for other ports
+    auth: {
+      user: user,
+      pass: pass,
+    },
+    tls: {
+      rejectUnauthorized: false // Para alguns provedores
+    }
+  });
+
+  const mailOptions = {
+    from: `"${fromName || 'Agendiia'}" <${fromEmail || user}>`,
+    to: `"${toName}" <${toEmail}>`,
+    subject: subject,
+    html: html,
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log('SMTP email sent:', info.messageId);
+    return info.messageId || 'sent';
+  } catch (error: any) {
+    console.error('SMTP error:', error);
+    throw new HttpsError('internal', `Erro SMTP: ${error.message}`);
+  }
+}
+
+// Removed Brevo/WhatsApp integrations – SMTP-only implementation
+
+// Diagnostics: verify SMTP transporter configuration and connectivity
+export const diagnoseEmailProviders = onCall({ region: 'us-central1' }, async () => {
+  const doc = await admin.firestore().doc('platform/settings').get();
+  const data = doc.exists ? (doc.data() as any) : {};
+  const smtp = data.smtp || {};
+  const result: any = { smtp: {} };
+
+  // SMTP verify
+  try {
+    if (smtp?.host && smtp?.user && smtp?.pass) {
+      const transporter = nodemailer.createTransport({
+        host: smtp.host,
+        port: smtp.port || 587,
+        secure: !!smtp.secure,
+        auth: { user: smtp.user, pass: smtp.pass },
+        tls: { rejectUnauthorized: false },
+      });
+      await transporter.verify();
+      result.smtp.ok = true;
+    } else {
+      result.smtp.ok = false;
+      result.smtp.error = 'missing or incomplete config';
+    }
+  } catch (e: any) {
+    result.smtp.ok = false;
+    result.smtp.error = e?.message || String(e);
+  }
+
+  return result;
+});
+
+// Diagnostics: send a real test email with current provider selection
+export const sendEmailDiagnostics = onCall({ region: 'us-central1' }, async (req) => {
+  const { toEmail } = (req.data || {}) as { toEmail?: string };
+  if (!toEmail) throw new HttpsError('invalid-argument', 'toEmail é obrigatório');
+  const subject = 'Diagnóstico de Email - Agendiia';
+  const html = '<p>Este é um envio de diagnóstico do sistema de e-mail (SMTP).</p>';
+
+  const settingsSnap = await admin.firestore().doc('platform/settings').get();
+  const cfg = settingsSnap.exists ? (settingsSnap.data() as any) : {};
+  const smtp = cfg.smtp;
+
+  try {
+    if (!(smtp?.host && smtp?.user && smtp?.pass)) throw new HttpsError('failed-precondition', 'SMTP não configurado (host/user/pass ausentes)');
+    const id = await sendEmailViaSMTP(toEmail, toEmail, subject, html, smtp);
+    return { ok: true, providerUsed: 'smtp', messageId: id };
+  } catch (e: any) {
+    console.error('[sendEmailDiagnostics] Falha no envio:', e?.message || String(e));
+    throw e;
+  }
+});
 
 function formatDateTimePtBR(d: Date) {
   try { return d.toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }); }
@@ -169,14 +352,14 @@ export const createMercadoPagoPreference = onCall({
   }
 });
 
-// Callable to send transactional email via Brevo (Sendinblue)
-export const sendBrevoEmail = onCall({ region: 'us-central1' }, async (request) => {
+// Callable to send transactional email (SMTP-only)
+export const sendTransactionalEmail = onCall({ region: 'us-central1' }, async (request) => {
   const { toEmail, toName, subject, html } = (request?.data || {}) as any;
   if (!toEmail || !subject || !html) {
     throw new HttpsError('invalid-argument', 'Parâmetros obrigatórios ausentes.');
   }
   try {
-    const messageId = await sendEmailViaBrevo(toEmail, toName || toEmail, subject, html);
+    const messageId = await sendEmail(toEmail, toName || toEmail, subject, html);
     return { messageId: messageId || null };
   } catch (err: any) {
     if (err instanceof HttpsError) throw err;
@@ -184,72 +367,22 @@ export const sendBrevoEmail = onCall({ region: 'us-central1' }, async (request) 
   }
 });
 
-// Function to send welcome email using Brevo template
+// Keep legacy name for backward compatibility
+export const sendBrevoEmail = sendTransactionalEmail;
+
+// Function to send welcome email via SMTP
 async function sendWelcomeEmail(userEmail: string, userName: string): Promise<void> {
   try {
-    const ref = admin.firestore().doc('platform_settings/brevo');
-    const snap = await ref.get();
-    if (!snap.exists) {
-      console.error('Brevo settings not found for welcome email');
-      return;
-    }
-    
-    const settings = snap.data() as any;
-    const apiKey = settings.apiKey;
-    const fromName = settings.fromName || 'Agendiia';
-    const fromEmail = settings.fromEmail || 'nao-responda@agendiia.com.br';
-    
-    // Get welcome template ID from settings (you'll need to configure this)
-    const welcomeTemplateId = settings.welcomeTemplateId;
-    
-    if (!welcomeTemplateId) {
-      console.warn('Welcome template ID not configured in Brevo settings');
-      // Fallback to regular email
-      const subject = 'Bem-vindo(a) à Agendiia!';
-      const html = `
-        <h2>Bem-vindo(a) à Agendiia, ${userName}!</h2>
-        <p>É um prazer tê-lo(a) conosco! Sua conta foi criada com sucesso.</p>
-        <p>Agora você pode começar a gerenciar seus agendamentos de forma mais eficiente.</p>
-        <p>Se precisar de ajuda, nossa equipe está sempre à disposição.</p>
-        <p>Atenciosamente,<br>Equipe Agendiia</p>
-      `;
-      await sendEmailViaBrevo(userEmail, userName, subject, html);
-      return;
-    }
-    
-    // Use Brevo template
-    const body = {
-      to: [{ email: userEmail, name: userName }],
-      templateId: Number(welcomeTemplateId),
-      params: {
-        FNAME: userName,
-        NAME: userName,
-        EMAIL: userEmail
-      }
-    };
-
-    const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'api-key': apiKey,
-        'content-type': 'application/json',
-        'accept': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.error('Brevo welcome email API error:', text);
-      throw new Error(`Brevo API error: ${text}`);
-    }
-    
-    const json = await resp.json() as any;
-    console.log('Welcome email sent successfully:', json.messageId);
-    
+    const subject = 'Bem-vindo(a) à Agendiia!';
+    const html = `
+      <h2>Bem-vindo(a) à Agendiia, ${userName}!</h2>
+      <p>Sua conta foi criada com sucesso. A partir de agora, você pode gerenciar seus agendamentos de forma eficiente.</p>
+      <p>Se precisar de ajuda, estamos à disposição.</p>
+      <p>Atenciosamente,<br/>Equipe Agendiia</p>
+    `;
+    await sendEmail(userEmail, userName || userEmail, subject, html);
   } catch (error) {
     console.error('Error sending welcome email:', error);
-    // Don't throw here to avoid blocking user creation
   }
 }
 
@@ -266,6 +399,8 @@ export const onUserDocumentCreated = onDocumentCreated('users/{userId}', async (
     }
     
     const userData = snap.data() as any;
+    const userEmail = userData.email;
+    const userName = userData.name || 'Novo Usuário';
 
     // SAFETY NET: Add a counter check to prevent infinite loops
     const welcomeEmailAttemptCount = userData.welcomeEmailAttemptCount || 0;
@@ -280,6 +415,11 @@ export const onUserDocumentCreated = onDocumentCreated('users/{userId}', async (
       return;
     }
 
+    if (!userEmail) {
+        console.log('[onUserDocumentCreated] user has no email, skipping');
+        return;
+    }
+
     console.log(`[onUserDocumentCreated] Sending welcome email to ${userEmail}`);
     
     // Increment attempt counter before sending
@@ -289,6 +429,30 @@ export const onUserDocumentCreated = onDocumentCreated('users/{userId}', async (
 
     // Send welcome email
     await sendWelcomeEmail(userEmail, userName);
+
+    // Notify platform admin(s) about new professional signup
+    try {
+      const settingsSnap = await admin.firestore().doc('platform/settings').get();
+      const settings = settingsSnap.exists ? (settingsSnap.data() as any) : {};
+      const admins: string[] = Array.isArray(settings.adminEmails)
+        ? settings.adminEmails
+        : (settings.adminEmails ? [settings.adminEmails] : []);
+      const fallbackAdmins = ['contato@agendiia.com.br'];
+      const recipients = (admins.length ? admins : fallbackAdmins).filter(Boolean);
+      const subj = 'Novo profissional cadastrado na Agendiia';
+      const html = `
+        <p>Um novo profissional acabou de se cadastrar.</p>
+        <ul>
+          <li><b>Nome:</b> ${userName}</li>
+          <li><b>Email:</b> ${userEmail}</li>
+          <li><b>User ID:</b> ${userId}</li>
+        </ul>`;
+      for (const email of recipients) {
+        try { await sendEmail(email, email, subj, html); } catch (e) { console.warn('Admin notify send failed for', email, e); }
+      }
+    } catch (adminNotifyErr) {
+      console.warn('Failed to notify admins about signup', adminNotifyErr);
+    }
     
     // Mark welcome email as sent
     await snap.ref.update({
@@ -335,6 +499,7 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
     const clientName: string = data.clientName || 'Cliente';
     const serviceName: string = data.service || 'Atendimento';
     const dt: Date = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
+  // const clientPhone: string | undefined = data.clientPhone;
 
     // Resolve professional name and email with fallbacks
     const db = admin.firestore();
@@ -388,7 +553,7 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       try {
         const html = applyTemplate(clientBody, vars);
         const subj = applyTemplate(clientSubject, vars);
-        const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+        const msgId = await sendEmail(clientEmail, clientName, subj, html);
         await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       } catch (err: any) {
         console.warn('onAppointmentCreated: failed to send confirmation email to client', err);
@@ -398,12 +563,34 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       try { await snap.ref.set({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
     }
 
+    // Optional WhatsApp notification (W-API) — controlled by platform/settings.whatsapp
+    try {
+      const settingsSnap = await admin.firestore().doc('platform/settings').get();
+      const settings = settingsSnap.exists ? (settingsSnap.data() as any) : {};
+      const waCfg = settings.whatsapp as any;
+      const waEnabled = !!waCfg?.enabled;
+      const sendOnBooking = !!waCfg?.sendOnBooking; // feature flag
+      const clientPhone: string | undefined = (data.clientPhone || data.phone || '').toString();
+      if (waEnabled && sendOnBooking && clientPhone && data.whatsappConfirmationStatus !== 'sent') {
+        try {
+          const waMsg = applyTemplate(`Olá {clientName}! Seu agendamento de {serviceName} está confirmado para {dateTime}.`, vars);
+          await sendWhatsAppViaWapi(clientPhone, waMsg);
+          try { await snap.ref.set({ whatsappConfirmationStatus: 'sent', whatsappConfirmationAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+        } catch (waErr) {
+          console.warn('onAppointmentCreated: WhatsApp send failed', waErr);
+          try { await snap.ref.set({ whatsappConfirmationStatus: 'error', whatsappConfirmationError: (waErr as any)?.message || String(waErr) }, { merge: true }); } catch {}
+        }
+      }
+    } catch (waWrapErr) {
+      console.warn('onAppointmentCreated: WhatsApp block error', waWrapErr);
+    }
+
     // Notify professional (best-effort)
     if (profEmail) {
       try {
         const profHtml = applyTemplate(profBodyTemplate, vars);
         const profSubj = applyTemplate(profSubject, vars);
-        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubj, profHtml);
+        const pMsgId = await sendEmail(profEmail, professionalName, profSubj, profHtml);
         try { await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
       } catch (err: any) {
         console.warn('onAppointmentCreated: failed to notify professional', err);
@@ -437,9 +624,15 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
     const beforeCopy = { ...(before || {}) };
     const afterCopy = { ...data };
     const statusFields = [
-      'updateEmailStatus', 'updateEmailId', 'professionalNotificationStatus', 
-      'professionalNotificationId', 'professionalNotificationError', 'updatedAt',
-      'emailUpdateCount' // Also ignore our new counter field
+      // Email/update bookkeeping fields
+      'updateEmailStatus', 'updateEmailId', 'updateEmailError',
+      'professionalNotificationStatus', 'professionalNotificationId', 'professionalNotificationError',
+      'confirmationEmailStatus', 'confirmationEmailId', 'confirmationEmailError',
+      // Reminder flags and locks
+      'reminder24hSent', 'reminder24hSending', 'reminder24hError', 'reminder24hErrorAt',
+      'reminder3hSent', 'reminder3hSending', 'reminder3hError', 'reminder3hErrorAt',
+      // Generic housekeeping
+      'updatedAt', 'createdAt', 'emailUpdateCount', 'mpPreferenceId'
     ];
     statusFields.forEach(f => {
       delete beforeCopy[f];
@@ -450,6 +643,21 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
     // This is not perfect but good enough for this scenario. A deep equal would be better but expensive.
     if (JSON.stringify(beforeCopy) === JSON.stringify(afterCopy)) {
       console.log(`[onAppointmentUpdated] LOOP PREVENTION: Skipping execution because only email status fields changed.`);
+      return;
+    }
+
+    // Only send update emails when meaningful business fields change
+    const meaningfulFields = new Set([
+      'dateTime', 'status', 'service', 'clientName', 'clientEmail', 'duration', 'notes', 'location'
+    ]);
+    const changedKeys = Array.from(new Set([
+      ...Object.keys(afterCopy),
+      ...Object.keys(beforeCopy)
+    ])).filter(k => JSON.stringify((beforeCopy as any)[k]) !== JSON.stringify((afterCopy as any)[k]));
+
+    const hasMeaningfulChange = changedKeys.some(k => meaningfulFields.has(k));
+    if (!hasMeaningfulChange) {
+      console.log('[onAppointmentUpdated] Skip: No meaningful field changed.', { changedKeys });
       return;
     }
 
@@ -494,7 +702,7 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
       try {
         const html = applyTemplate(clientTmpl.body, vars);
         const subj = applyTemplate(clientTmpl.subject, vars);
-        const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+        const msgId = await sendEmail(clientEmail, clientName, subj, html);
         updatePayload.updateEmailStatus = 'sent';
         updatePayload.updateEmailId = msgId || null;
       } catch (e: any) {
@@ -515,7 +723,7 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
       try {
         const profHtml = applyTemplate(profTmpl.body, vars);
         const profSubj = applyTemplate(profTmpl.subject, vars);
-        const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubj, profHtml);
+        const pMsgId = await sendEmail(profEmail, professionalName, profSubj, profHtml);
         updatePayload.professionalNotificationStatus = 'sent';
         updatePayload.professionalNotificationId = pMsgId || null;
       } catch (e: any) {
@@ -664,7 +872,7 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
         professionalName,
       };
 
-      await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+      await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
       // Mark sent and clear sending flag
       try {
         await docRef.update({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() });
@@ -689,6 +897,99 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
   }
   console.log(`[${event.jobName}] V4 END: Job finished.`);
 });
+
+
+// Lembrete de 3 horas via Email (SMTP)
+export const sendHourlyReminders = onSchedule({ schedule: 'every 15 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async (event) => {
+  const now = new Date();
+  // Enviar para agendamentos entre 2h 45m e 3h a partir de agora
+  const in2h45m = new Date(now.getTime() + 2.75 * 3600 * 1000);
+  const in3h = new Date(now.getTime() + 3 * 3600 * 1000);
+
+  const db = admin.firestore();
+  const tsStart = admin.firestore.Timestamp.fromDate(in2h45m);
+  const tsEnd = admin.firestore.Timestamp.fromDate(in3h);
+  console.log(`[sendHourlyReminders] V1 START: Range: ${tsStart.toDate().toISOString()} to ${tsEnd.toDate().toISOString()}`);
+
+  const appointmentDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+
+  try {
+    const usersSnapshot = await db.collection('users').get();
+    const promises = usersSnapshot.docs.map(userDoc =>
+      db.collection(`users/${userDoc.id}/appointments`)
+        .where('dateTime', '>=', tsStart)
+        .where('dateTime', '<=', tsEnd)
+        .get()
+        .then(userAppointments => userAppointments.docs)
+    );
+    const results = await Promise.all(promises);
+    appointmentDocs.push(...results.flat());
+    console.log(`[sendHourlyReminders] V1 SUCCESS: Found ${appointmentDocs.length} total appointments in range.`);
+  } catch (err) {
+    console.error(`[sendHourlyReminders] V1 CATCH: The scan failed.`, err);
+    return;
+  }
+
+  if (appointmentDocs.length === 0) {
+    console.log(`[sendHourlyReminders] V1 END: No appointments found. Job finished.`);
+    return;
+  }
+
+  for (const docSnap of appointmentDocs) {
+    const ap: any = docSnap.data();
+    if (ap.reminder3hSent) { continue; }
+    if (ap.status !== 'Agendado' && ap.status !== 'Confirmado') { continue; }
+    const email = ap.clientEmail || ap.email;
+    if (!email) { continue; }
+
+    const docRef = docSnap.ref;
+    try {
+      await db.runTransaction(async (tx) => {
+        const cur = await tx.get(docRef);
+        const curData = cur.exists ? (cur.data() as any) : {};
+        if (curData.reminder3hSent) return;
+        if (curData.reminder3hSending) return;
+        tx.update(docRef, { reminder3hSending: admin.firestore.FieldValue.serverTimestamp() });
+      });
+
+      const dt: Date = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+      const name = ap.clientName || 'Cliente';
+      const serviceName = ap.service || 'Atendimento';
+      const userId = docSnap.ref.path.split('/')[1];
+      const userDoc = await db.doc(`users/${userId}`).get();
+      const professionalName = userDoc.exists ? (userDoc.data() as any)?.name || 'Seu Profissional' : 'Seu Profissional';
+
+      // Load optional template t_remind3h
+      const autoSnap = await db.doc('platform/automations').get();
+      let subject = 'Lembrete: sua consulta começa em 3 horas';
+      let body = `Olá {clientName},<br/><br/>Seu atendimento de {serviceName} com {professionalName} acontecerá em 3 horas.<br/>📅 Data: {date}<br/>🕘 Horário: {time}<br/><br/>Até breve!`;
+      if (autoSnap.exists) {
+        const au: any = autoSnap.data();
+        const tmpl = Array.isArray(au.templates) ? au.templates.find((t: any) => t.id === 't_remind3h') : null;
+        if (tmpl?.subject) subject = tmpl.subject;
+        if (tmpl?.body) body = tmpl.body;
+      }
+
+      const vars = {
+        clientName: name,
+        professionalName,
+        serviceName,
+        date: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+        time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+        dateTime: formatDateTimePtBR(dt),
+      } as any;
+
+      await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+      await docRef.update({ reminder3hSent: true, reminder3hSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder3hSending: admin.firestore.FieldValue.delete() });
+      console.log(`[sendHourlyReminders] EMAIL SUCCESS: Sent 3h reminder for appointment ${docSnap.id} to ${email}.`);
+    } catch (e) {
+      console.error(`[sendHourlyReminders] EMAIL FAIL: Error on appointment ${docSnap.id}.`, e);
+      try { await docRef.update({ reminder3hSending: admin.firestore.FieldValue.delete(), reminder3hError: (e as any)?.message || String(e) }); } catch {}
+    }
+  }
+  console.log(`[sendHourlyReminders] V1 END: Job finished.`);
+});
+
 
 // Callable debug helper: allows testing the reminder logic with a custom window and optional dry run
 export const debugSendDailyReminders = onCall({ region: 'us-central1' }, async (req) => {
@@ -747,7 +1048,7 @@ export const debugSendDailyReminders = onCall({ region: 'us-central1' }, async (
         const subject = 'TESTE Lembrete (debug)';
         const body = `Debug: agendamento em ${dt.toISOString()} para {clientName}`;
         const vars = { clientName: name } as any;
-        await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+        await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
         await docSnap.ref.set({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() }, { merge: true });
         out.processed++;
         info.sent = true;
@@ -2193,7 +2494,7 @@ export const notifyTrialsEndingToday = onSchedule({ schedule: 'every 24 hours', 
         // Send email if available (best-effort)
         if (email) {
           try {
-            await sendEmailViaBrevo(email, name || email, subject, html);
+            await sendEmail(email, name || email, subject, html);
           } catch (e) {
             console.warn('notifyTrialsEndingToday: email send failed for', u.id, e);
           }

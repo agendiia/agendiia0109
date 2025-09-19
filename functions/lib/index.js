@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getContentAnalytics = exports.dismissAnnouncement = exports.getActiveAnnouncements = exports.createAnnouncement = exports.getAnnouncements = exports.createWikiPage = exports.getWikiPages = exports.publishLandingPage = exports.createLandingPage = exports.getLandingPages = exports.updateEmailTemplate = exports.createEmailTemplate = exports.getEmailTemplates = exports.getRateLimitStats = exports.monitorResources = exports.createCostAlert = exports.getCostAlerts = exports.getExternalServiceUsage = exports.getResourceViolations = exports.updateUserQuotas = exports.getResourceUsage = exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.reactivateStripeSubscription = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.deletePlatformUser = exports.updatePlatformUser = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.debugSendDailyReminders = exports.sendDailyReminders = exports.onAppointmentUpdated = exports.onAppointmentCreated = exports.sendBrevoEmail = exports.createMercadoPagoPreference = void 0;
+exports.notifyTrialsEndingToday = exports.expireTrialsDaily = exports.getPlatformAnalytics = exports.reactivateStripeSubscription = exports.cancelStripeSubscription = exports.createStripeCustomerPortalSession = exports.createStripeCheckoutSession = exports.stripeWebhook = exports.grantOrExtendTrial = exports.setUserPlan = exports.exportAuditLogsCsv = exports.recordAdminAction = exports.updatePlatformSettings = exports.impersonateUser = exports.forcePasswordReset = exports.toggleUserStatus = exports.deletePlatformUser = exports.updatePlatformUser = exports.listPlatformUsers = exports.mercadoPagoWebhook = exports.finalizeReservation = exports.createReservation = exports.applyStorageCors = exports.debugSendDailyReminders = exports.sendHourlyReminders = exports.sendDailyReminders = exports.onAppointmentUpdated = exports.onAppointmentCreated = exports.onUserDocumentCreated = exports.sendBrevoEmail = exports.sendTransactionalEmail = exports.createMercadoPagoPreference = exports.sendEmailDiagnostics = exports.diagnoseEmailProviders = void 0;
 exports.finalizeReservationInternal = finalizeReservationInternal;
 const https_1 = require("firebase-functions/v2/https");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -44,37 +44,111 @@ const scheduler_1 = require("firebase-functions/v2/scheduler");
 const https_2 = require("firebase-functions/v2/https");
 const stripe_1 = __importDefault(require("stripe"));
 const admin = __importStar(require("firebase-admin"));
+const nodemailer = __importStar(require("nodemailer"));
 const rateLimiter_1 = require("./rateLimiter");
+// import Billing from '@google-cloud/billing'; // Commented out temporarily
 admin.initializeApp();
-// Small server-side email sender using Brevo settings in Firestore
-async function sendEmailViaBrevo(toEmail, toName, subject, html) {
-    if (!toEmail)
-        throw new https_1.HttpsError('invalid-argument', 'Destino sem e-mail');
-    const cfgSnap = await admin.firestore().doc('platform/brevo').get();
-    const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-    const apiKey = cfg?.apiKey;
-    const senderEmail = cfg?.senderEmail || 'no-reply@agendiia.app';
-    const senderName = cfg?.senderName || 'Agendiia';
-    if (!apiKey)
-        throw new https_1.HttpsError('failed-precondition', 'Brevo não configurado.');
-    const body = {
-        sender: { email: senderEmail, name: senderName },
-        to: [{ email: toEmail, name: toName || toEmail }],
-        subject,
-        htmlContent: html,
-    };
-    const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: { 'api-key': apiKey, 'content-type': 'application/json', 'accept': 'application/json' },
-        body: JSON.stringify(body),
+// Email sender - SMTP (Hostinger) only
+async function sendEmail(toEmail, toName, subject, html) {
+    const platformSettings = await admin.firestore().doc('platform/settings').get();
+    const settingsData = platformSettings.exists ? platformSettings.data() : {};
+    const smtpConfig = settingsData.smtp;
+    console.log('[sendEmail] SMTP-only start', {
+        toEmail,
+        useSmtp: !!(smtpConfig && smtpConfig.host && smtpConfig.user && smtpConfig.pass),
     });
-    if (!resp.ok) {
-        const t = await resp.text();
-        throw new https_1.HttpsError('internal', `Erro Brevo: ${resp.status} - ${t}`);
+    if (smtpConfig && smtpConfig.host && smtpConfig.user && smtpConfig.pass) {
+        return await sendEmailViaSMTP(toEmail, toName, subject, html, smtpConfig);
     }
-    const json = await resp.json();
-    return json?.messageId || (Array.isArray(json?.messageIds) ? json.messageIds[0] : null);
+    throw new https_1.HttpsError('failed-precondition', 'SMTP não configurado. Defina platform/settings.smtp (host, user, pass, fromEmail).');
 }
+// SMTP implementation for Hostinger
+async function sendEmailViaSMTP(toEmail, toName, subject, html, settings) {
+    const { host, port, secure, user, pass, fromName, fromEmail } = settings;
+    if (!host || !user || !pass) {
+        throw new https_1.HttpsError('failed-precondition', 'Configuração SMTP incompleta');
+    }
+    // nodemailer API: createTransport
+    const transporter = nodemailer.createTransport({
+        host: host,
+        port: port || 587,
+        secure: secure || false, // true for 465, false for other ports
+        auth: {
+            user: user,
+            pass: pass,
+        },
+        tls: {
+            rejectUnauthorized: false // Para alguns provedores
+        }
+    });
+    const mailOptions = {
+        from: `"${fromName || 'Agendiia'}" <${fromEmail || user}>`,
+        to: `"${toName}" <${toEmail}>`,
+        subject: subject,
+        html: html,
+    };
+    try {
+        const info = await transporter.sendMail(mailOptions);
+        console.log('SMTP email sent:', info.messageId);
+        return info.messageId || 'sent';
+    }
+    catch (error) {
+        console.error('SMTP error:', error);
+        throw new https_1.HttpsError('internal', `Erro SMTP: ${error.message}`);
+    }
+}
+// Removed Brevo/WhatsApp integrations – SMTP-only implementation
+// Diagnostics: verify SMTP transporter configuration and connectivity
+exports.diagnoseEmailProviders = (0, https_1.onCall)({ region: 'us-central1' }, async () => {
+    const doc = await admin.firestore().doc('platform/settings').get();
+    const data = doc.exists ? doc.data() : {};
+    const smtp = data.smtp || {};
+    const result = { smtp: {} };
+    // SMTP verify
+    try {
+        if (smtp?.host && smtp?.user && smtp?.pass) {
+            const transporter = nodemailer.createTransport({
+                host: smtp.host,
+                port: smtp.port || 587,
+                secure: !!smtp.secure,
+                auth: { user: smtp.user, pass: smtp.pass },
+                tls: { rejectUnauthorized: false },
+            });
+            await transporter.verify();
+            result.smtp.ok = true;
+        }
+        else {
+            result.smtp.ok = false;
+            result.smtp.error = 'missing or incomplete config';
+        }
+    }
+    catch (e) {
+        result.smtp.ok = false;
+        result.smtp.error = e?.message || String(e);
+    }
+    return result;
+});
+// Diagnostics: send a real test email with current provider selection
+exports.sendEmailDiagnostics = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
+    const { toEmail } = (req.data || {});
+    if (!toEmail)
+        throw new https_1.HttpsError('invalid-argument', 'toEmail é obrigatório');
+    const subject = 'Diagnóstico de Email - Agendiia';
+    const html = '<p>Este é um envio de diagnóstico do sistema de e-mail (SMTP).</p>';
+    const settingsSnap = await admin.firestore().doc('platform/settings').get();
+    const cfg = settingsSnap.exists ? settingsSnap.data() : {};
+    const smtp = cfg.smtp;
+    try {
+        if (!(smtp?.host && smtp?.user && smtp?.pass))
+            throw new https_1.HttpsError('failed-precondition', 'SMTP não configurado (host/user/pass ausentes)');
+        const id = await sendEmailViaSMTP(toEmail, toEmail, subject, html, smtp);
+        return { ok: true, providerUsed: 'smtp', messageId: id };
+    }
+    catch (e) {
+        console.error('[sendEmailDiagnostics] Falha no envio:', e?.message || String(e));
+        throw e;
+    }
+});
 function formatDateTimePtBR(d) {
     try {
         return d.toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
@@ -182,20 +256,123 @@ exports.createMercadoPagoPreference = (0, https_1.onCall)({
         throw new https_1.HttpsError('internal', err?.message || 'Falha ao criar preferência');
     }
 });
-// Callable to send transactional email via Brevo (Sendinblue)
-exports.sendBrevoEmail = (0, https_1.onCall)({ region: 'us-central1' }, async (request) => {
+// Callable to send transactional email (SMTP-only)
+exports.sendTransactionalEmail = (0, https_1.onCall)({ region: 'us-central1' }, async (request) => {
     const { toEmail, toName, subject, html } = (request?.data || {});
     if (!toEmail || !subject || !html) {
         throw new https_1.HttpsError('invalid-argument', 'Parâmetros obrigatórios ausentes.');
     }
     try {
-        const messageId = await sendEmailViaBrevo(toEmail, toName || toEmail, subject, html);
+        const messageId = await sendEmail(toEmail, toName || toEmail, subject, html);
         return { messageId: messageId || null };
     }
     catch (err) {
         if (err instanceof https_1.HttpsError)
             throw err;
         throw new https_1.HttpsError('internal', err?.message || 'Falha ao enviar e-mail');
+    }
+});
+// Keep legacy name for backward compatibility
+exports.sendBrevoEmail = exports.sendTransactionalEmail;
+// Function to send welcome email via SMTP
+async function sendWelcomeEmail(userEmail, userName) {
+    try {
+        const subject = 'Bem-vindo(a) à Agendiia!';
+        const html = `
+      <h2>Bem-vindo(a) à Agendiia, ${userName}!</h2>
+      <p>Sua conta foi criada com sucesso. A partir de agora, você pode gerenciar seus agendamentos de forma eficiente.</p>
+      <p>Se precisar de ajuda, estamos à disposição.</p>
+      <p>Atenciosamente,<br/>Equipe Agendiia</p>
+    `;
+        await sendEmail(userEmail, userName || userEmail, subject, html);
+    }
+    catch (error) {
+        console.error('Error sending welcome email:', error);
+    }
+}
+// Send welcome email when a new user document is created
+exports.onUserDocumentCreated = (0, firestore_1.onDocumentCreated)('users/{userId}', async (event) => {
+    const { userId } = event.params;
+    console.log(`[onUserDocumentCreated] Triggered for userId: ${userId}`);
+    try {
+        const snap = event.data;
+        if (!snap || !snap.exists) {
+            console.log('[onUserDocumentCreated] no data, exiting');
+            return;
+        }
+        const userData = snap.data();
+        const userEmail = userData.email;
+        const userName = userData.name || 'Novo Usuário';
+        // SAFETY NET: Add a counter check to prevent infinite loops
+        const welcomeEmailAttemptCount = userData.welcomeEmailAttemptCount || 0;
+        if (welcomeEmailAttemptCount >= 5) {
+            console.warn(`[onUserDocumentCreated] SAFETY NET TRIGGERED: welcomeEmailAttemptCount is ${welcomeEmailAttemptCount} for user ${userId}. Halting execution.`);
+            return;
+        }
+        // Check if welcome email was already sent
+        if (userData.welcomeEmailSent) {
+            console.log('[onUserDocumentCreated] welcome email already sent, skipping');
+            return;
+        }
+        if (!userEmail) {
+            console.log('[onUserDocumentCreated] user has no email, skipping');
+            return;
+        }
+        console.log(`[onUserDocumentCreated] Sending welcome email to ${userEmail}`);
+        // Increment attempt counter before sending
+        await snap.ref.update({
+            welcomeEmailAttemptCount: admin.firestore.FieldValue.increment(1)
+        });
+        // Send welcome email
+        await sendWelcomeEmail(userEmail, userName);
+        // Notify platform admin(s) about new professional signup
+        try {
+            const settingsSnap = await admin.firestore().doc('platform/settings').get();
+            const settings = settingsSnap.exists ? settingsSnap.data() : {};
+            const admins = Array.isArray(settings.adminEmails)
+                ? settings.adminEmails
+                : (settings.adminEmails ? [settings.adminEmails] : []);
+            const fallbackAdmins = ['contato@agendiia.com.br'];
+            const recipients = (admins.length ? admins : fallbackAdmins).filter(Boolean);
+            const subj = 'Novo profissional cadastrado na Agendiia';
+            const html = `
+        <p>Um novo profissional acabou de se cadastrar.</p>
+        <ul>
+          <li><b>Nome:</b> ${userName}</li>
+          <li><b>Email:</b> ${userEmail}</li>
+          <li><b>User ID:</b> ${userId}</li>
+        </ul>`;
+            for (const email of recipients) {
+                try {
+                    await sendEmail(email, email, subj, html);
+                }
+                catch (e) {
+                    console.warn('Admin notify send failed for', email, e);
+                }
+            }
+        }
+        catch (adminNotifyErr) {
+            console.warn('Failed to notify admins about signup', adminNotifyErr);
+        }
+        // Mark welcome email as sent
+        await snap.ref.update({
+            welcomeEmailSent: true,
+            welcomeEmailSentAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`[onUserDocumentCreated] Welcome email sent successfully to ${userEmail}`);
+    }
+    catch (error) {
+        console.error('[onUserDocumentCreated] Error:', error);
+        // Try to mark the error in the user document
+        try {
+            await event.data?.ref.update({
+                welcomeEmailError: error?.message || String(error),
+                welcomeEmailErrorAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+        catch (updateError) {
+            console.error('[onUserDocumentCreated] Failed to update error status:', updateError);
+        }
     }
 });
 // Firestore trigger: send confirmation email when a new appointment is created
@@ -218,6 +395,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
         const clientName = data.clientName || 'Cliente';
         const serviceName = data.service || 'Atendimento';
         const dt = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
+        // const clientPhone: string | undefined = data.clientPhone;
         // Resolve professional name and email with fallbacks
         const db = admin.firestore();
         const profileSnap = await db.doc(`users/${userId}/profile/main`).get().catch(() => null);
@@ -272,7 +450,7 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
             try {
                 const html = applyTemplate(clientBody, vars);
                 const subj = applyTemplate(clientSubject, vars);
-                const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
+                const msgId = await sendEmail(clientEmail, clientName, subj, html);
                 await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
             }
             catch (err) {
@@ -289,12 +467,13 @@ exports.onAppointmentCreated = (0, firestore_1.onDocumentCreated)('users/{userId
             }
             catch { }
         }
+        // WhatsApp flow removed – SMTP-only emails
         // Notify professional (best-effort)
         if (profEmail) {
             try {
                 const profHtml = applyTemplate(profBodyTemplate, vars);
                 const profSubj = applyTemplate(profSubject, vars);
-                const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubj, profHtml);
+                const pMsgId = await sendEmail(profEmail, professionalName, profSubj, profHtml);
                 try {
                     await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
                 }
@@ -329,159 +508,104 @@ exports.onAppointmentUpdated = (0, firestore_1.onDocumentUpdated)('users/{userId
             return;
         }
         const data = snap.data();
-        console.log(`[onAppointmentUpdated] Appointment data:`, JSON.stringify(data, null, 2));
-        // ANTI-LOOP: Check if this update was caused by our own email status updates
         const before = event.data?.before?.data();
-        const hasNewEmailStatus = data.updateEmailStatus && (!before || before.updateEmailStatus !== data.updateEmailStatus);
-        const hasNewProfNotificationStatus = data.professionalNotificationStatus && (!before || before.professionalNotificationStatus !== data.professionalNotificationStatus);
-        if (hasNewEmailStatus || hasNewProfNotificationStatus) {
-            console.log(`[onAppointmentUpdated] LOOP PREVENTION: Skipping execution because this update was triggered by email status change.`);
+        // ANTI-LOOP: Check if this update was only about our own status fields.
+        // Create copies of before/after and delete our status fields. If they are now identical, it means
+        // the only change was one of our status fields, so we should not run again.
+        const beforeCopy = { ...(before || {}) };
+        const afterCopy = { ...data };
+        const statusFields = [
+            'updateEmailStatus', 'updateEmailId', 'professionalNotificationStatus',
+            'professionalNotificationId', 'professionalNotificationError', 'updatedAt',
+            'emailUpdateCount' // Also ignore our new counter field
+        ];
+        statusFields.forEach(f => {
+            delete beforeCopy[f];
+            delete afterCopy[f];
+        });
+        // A simple heuristic: if the number of keys is different, something else changed.
+        // This is not perfect but good enough for this scenario. A deep equal would be better but expensive.
+        if (JSON.stringify(beforeCopy) === JSON.stringify(afterCopy)) {
+            console.log(`[onAppointmentUpdated] LOOP PREVENTION: Skipping execution because only email status fields changed.`);
             return;
         }
-        // Additional check: if both emails were already sent, skip
-        if (data.updateEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
-            console.log(`[onAppointmentUpdated] LOOP PREVENTION: Both emails already sent, skipping.`);
+        // SAFETY NET: Add a counter check to prevent infinite loops if logic fails
+        const emailUpdateCount = data.emailUpdateCount || 0;
+        if (emailUpdateCount >= 10) {
+            console.warn(`[onAppointmentUpdated] SAFETY NET TRIGGERED: emailUpdateCount is ${emailUpdateCount} for appointment ${appointmentId}. Halting execution to prevent loop.`);
             return;
         }
         const clientEmail = data.clientEmail || data.email;
         const clientName = data.clientName || 'Cliente';
-        console.log(`[onAppointmentUpdated] Extracted clientEmail: "${clientEmail}" and clientName: "${clientName}"`);
-        // Prossegue mesmo sem email do cliente para tentar notificar o profissional
         const serviceName = data.service || 'Atendimento';
         const dt = data.dateTime?.toDate ? data.dateTime.toDate() : new Date(data.dateTime);
-        // Get professional name from profile, with sensible fallbacks (users/{userId} doc, then Auth)
         const userProfileSnap = await admin.firestore().doc(`users/${userId}/profile/main`).get();
-        let professionalName = userProfileSnap.exists ? userProfileSnap.data()?.name : undefined;
-        if (!professionalName) {
-            // Try top-level users/{userId} doc
-            try {
-                const userDoc = await admin.firestore().doc(`users/${userId}`).get();
-                professionalName = userDoc && userDoc.exists ? userDoc.data()?.name : undefined;
-            }
-            catch (e) {
-                console.warn('onAppointmentUpdated - failed to read users/{userId} for professional name fallback', e);
-            }
-        }
-        if (!professionalName) {
-            // Try Firebase Auth displayName or email
-            try {
-                const authRec = await admin.auth().getUser(userId);
-                professionalName = authRec.displayName || authRec.email || undefined;
-            }
-            catch (e) {
-                // ignore
-            }
-        }
-        professionalName = professionalName || 'Profissional';
-        // Load template
+        let professionalName = userProfileSnap.exists ? userProfileSnap.data()?.name : 'Profissional';
         const autoSnap = await admin.firestore().doc('platform/automations').get();
-        const defaults = {
-            subject: 'Seu agendamento foi atualizado!',
-            body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi atualizado com sucesso!',
-        };
-        let subject = defaults.subject;
-        let body = defaults.body;
-        if (autoSnap.exists) {
-            const au = autoSnap.data();
-            const tmpl = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_sched') : null;
-            if (tmpl?.subject)
-                subject = tmpl.subject;
-            if (tmpl?.body)
-                body = tmpl.body;
-        }
+        const autoData = autoSnap.exists ? autoSnap.data() : {};
         const vars = {
             clientName,
             professionalName,
             serviceName,
             appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
             appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
-            // Compatibilidade com formato antigo
             dateTime: formatDateTimePtBR(dt),
-            time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
         };
-        // Backwards compatibility: also expose Portuguese variable names (some templates stored using these)
-        vars['nome do cliente'] = clientName;
-        vars['nome do profissional'] = professionalName;
-        vars['nome do serviço'] = serviceName;
-        vars['data'] = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-        vars['horário'] = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+        const updatePayload = {
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            emailUpdateCount: admin.firestore.FieldValue.increment(1) // Increment the counter
+        };
+        // 1. Handle Client Email
         if (clientEmail) {
-            console.log(`[onAppointmentUpdated] Client email found. Preparing to send update notification to ${clientEmail}.`);
-            const html = applyTemplate(body, vars);
-            const subj = applyTemplate(subject, vars);
-            const msgId = await sendEmailViaBrevo(clientEmail, clientName, subj, html);
-            console.log(`[onAppointmentUpdated] Email sent to client. Message ID: ${msgId}`);
-            // email do cliente enviado
-            await snap.ref.update({ updateEmailStatus: 'sent', updateEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            const clientTmpl = autoData.templates?.find((t) => t.id === 't_sched_update') || {
+                subject: 'Seu agendamento foi atualizado!',
+                body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi atualizado.',
+            };
+            try {
+                const html = applyTemplate(clientTmpl.body, vars);
+                const subj = applyTemplate(clientTmpl.subject, vars);
+                const msgId = await sendEmail(clientEmail, clientName, subj, html);
+                updatePayload.updateEmailStatus = 'sent';
+                updatePayload.updateEmailId = msgId || null;
+            }
+            catch (e) {
+                console.error(`[onAppointmentUpdated] Failed to send update email to client ${clientEmail}`, e);
+                updatePayload.updateEmailStatus = 'error';
+            }
         }
         else {
-            console.log(`[onAppointmentUpdated] Client email not found. Skipping email to client.`);
-            await snap.ref.update({ updateEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            updatePayload.updateEmailStatus = 'skipped_no_client_email';
         }
-        // Also notify the professional via email (try multiple fallbacks for email)
-        try {
-            const profProfile = userProfileSnap; // já buscado antes
-            let profEmail = profProfile.exists ? profProfile.data()?.email : undefined;
-            // fallback 1: users/{userId} top-level doc
-            if (!profEmail) {
-                try {
-                    const userDoc = await admin.firestore().doc(`users/${userId}`).get();
-                    if (userDoc && userDoc.exists) {
-                        const tmp = userDoc.data()?.email;
-                        profEmail = tmp || profEmail;
-                    }
-                }
-                catch (e) {
-                    console.warn('onAppointmentUpdated - falha ao ler users/{userId} para fallback de email', e);
-                }
-            }
-            // fallback 2: Firebase Auth
-            if (!profEmail) {
-                try {
-                    const authRec = await admin.auth().getUser(userId);
-                    profEmail = authRec?.email || profEmail;
-                }
-                catch (e) {
-                    console.warn('onAppointmentUpdated - falha ao obter auth record para fallback de email', e);
-                }
-            }
-            // fallback 3 (último recurso): se ainda não houver email, não envia
-            if (profEmail) {
-                // Carregar template específico para profissional
-                const autoData = autoSnap.exists ? autoSnap.data() : null;
-                const profTmpl = autoData && Array.isArray(autoData.templates) ? autoData.templates.find((t) => t.id === 't_sched_professional') : null;
-                const profSubject = applyTemplate(profTmpl?.subject || `Novo agendamento: {serviceName}`, vars);
-                const profBodyTemplate = profTmpl?.body || `<div>Olá {professionalName},<br/><br/>Seu agendamento foi atualizado.<br/><br/>Cliente: {clientName}<br/>Serviço: {serviceName}<br/>Data: {appointmentDate}<br/>Horário: {appointmentTime}<br/><br/>Atenciosamente,<br/>{professionalName}</div>`;
-                // Garantir que variáveis críticas existam
-                if (!vars.appointmentDate)
-                    vars.appointmentDate = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-                if (!vars.appointmentTime)
-                    vars.appointmentTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-                if (!vars.professionalName)
-                    vars.professionalName = professionalName;
-                const profHtml = applyTemplate(profBodyTemplate, vars);
-                const pMsgId = await sendEmailViaBrevo(profEmail, professionalName, profSubject, profHtml);
-                // email profissional enviado
-                try {
-                    await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-                }
-                catch (w) {
-                    console.warn('onAppointmentUpdated - falha ao registrar status do email do profissional', w);
-                }
-            }
-            else {
-                try {
-                    await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-                }
-                catch { }
-            }
-        }
-        catch (e) {
-            console.warn('Failed to notify professional by email', e);
+        // 2. Handle Professional Notification
+        const profEmail = (await admin.auth().getUser(userId).catch(() => null))?.email;
+        if (profEmail) {
+            const profTmpl = autoData.templates?.find((t) => t.id === 't_sched_update_professional') || {
+                subject: 'Agendamento atualizado: {clientName}',
+                body: 'O agendamento de {clientName} para {serviceName} em {dateTime} foi atualizado.',
+            };
             try {
-                await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: e?.message || String(e), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                const profHtml = applyTemplate(profTmpl.body, vars);
+                const profSubj = applyTemplate(profTmpl.subject, vars);
+                const pMsgId = await sendEmail(profEmail, professionalName, profSubj, profHtml);
+                updatePayload.professionalNotificationStatus = 'sent';
+                updatePayload.professionalNotificationId = pMsgId || null;
             }
-            catch { }
+            catch (e) {
+                console.error(`[onAppointmentUpdated] Failed to send update email to professional ${profEmail}`, e);
+                updatePayload.professionalNotificationStatus = 'error';
+                updatePayload.professionalNotificationError = e?.message || String(e);
+            }
+        }
+        else {
+            updatePayload.professionalNotificationStatus = 'skipped_no_professional_email';
+        }
+        // 3. Perform a SINGLE update at the end
+        if (Object.keys(updatePayload).length > 2) { // more than just timestamp and counter
+            console.log('[onAppointmentUpdated] Applying final update with payload:', updatePayload);
+            await snap.ref.update(updatePayload);
+        }
+        else {
+            console.log('[onAppointmentUpdated] No updates to apply.');
         }
     }
     catch (e) {
@@ -621,7 +745,7 @@ exports.sendDailyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 60 m
                 time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
                 professionalName,
             };
-            await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+            await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
             // Mark sent and clear sending flag
             try {
                 await docRef.update({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() });
@@ -650,6 +774,99 @@ exports.sendDailyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 60 m
         console.log(`[${event.jobName}] V4 END: No valid reminders to send.`);
     }
     console.log(`[${event.jobName}] V4 END: Job finished.`);
+});
+// Lembrete de 3 horas via Email (SMTP)
+exports.sendHourlyReminders = (0, scheduler_1.onSchedule)({ schedule: 'every 15 minutes', timeZone: 'America/Sao_Paulo', region: 'us-central1' }, async (event) => {
+    const now = new Date();
+    // Enviar para agendamentos entre 2h 45m e 3h a partir de agora
+    const in2h45m = new Date(now.getTime() + 2.75 * 3600 * 1000);
+    const in3h = new Date(now.getTime() + 3 * 3600 * 1000);
+    const db = admin.firestore();
+    const tsStart = admin.firestore.Timestamp.fromDate(in2h45m);
+    const tsEnd = admin.firestore.Timestamp.fromDate(in3h);
+    console.log(`[sendHourlyReminders] V1 START: Range: ${tsStart.toDate().toISOString()} to ${tsEnd.toDate().toISOString()}`);
+    const appointmentDocs = [];
+    try {
+        const usersSnapshot = await db.collection('users').get();
+        const promises = usersSnapshot.docs.map(userDoc => db.collection(`users/${userDoc.id}/appointments`)
+            .where('dateTime', '>=', tsStart)
+            .where('dateTime', '<=', tsEnd)
+            .get()
+            .then(userAppointments => userAppointments.docs));
+        const results = await Promise.all(promises);
+        appointmentDocs.push(...results.flat());
+        console.log(`[sendHourlyReminders] V1 SUCCESS: Found ${appointmentDocs.length} total appointments in range.`);
+    }
+    catch (err) {
+        console.error(`[sendHourlyReminders] V1 CATCH: The scan failed.`, err);
+        return;
+    }
+    if (appointmentDocs.length === 0) {
+        console.log(`[sendHourlyReminders] V1 END: No appointments found. Job finished.`);
+        return;
+    }
+    for (const docSnap of appointmentDocs) {
+        const ap = docSnap.data();
+        if (ap.reminder3hSent) {
+            continue;
+        }
+        if (ap.status !== 'Agendado' && ap.status !== 'Confirmado') {
+            continue;
+        }
+        const email = ap.clientEmail || ap.email;
+        if (!email) {
+            continue;
+        }
+        const docRef = docSnap.ref;
+        try {
+            await db.runTransaction(async (tx) => {
+                const cur = await tx.get(docRef);
+                const curData = cur.exists ? cur.data() : {};
+                if (curData.reminder3hSent)
+                    return;
+                if (curData.reminder3hSending)
+                    return;
+                tx.update(docRef, { reminder3hSending: admin.firestore.FieldValue.serverTimestamp() });
+            });
+            const dt = ap.dateTime?.toDate ? ap.dateTime.toDate() : new Date(ap.dateTime);
+            const name = ap.clientName || 'Cliente';
+            const serviceName = ap.service || 'Atendimento';
+            const userId = docSnap.ref.path.split('/')[1];
+            const userDoc = await db.doc(`users/${userId}`).get();
+            const professionalName = userDoc.exists ? userDoc.data()?.name || 'Seu Profissional' : 'Seu Profissional';
+            // Load optional template t_remind3h
+            const autoSnap = await db.doc('platform/automations').get();
+            let subject = 'Lembrete: sua consulta começa em 3 horas';
+            let body = `Olá {clientName},<br/><br/>Seu atendimento de {serviceName} com {professionalName} acontecerá em 3 horas.<br/>📅 Data: {date}<br/>🕘 Horário: {time}<br/><br/>Até breve!`;
+            if (autoSnap.exists) {
+                const au = autoSnap.data();
+                const tmpl = Array.isArray(au.templates) ? au.templates.find((t) => t.id === 't_remind3h') : null;
+                if (tmpl?.subject)
+                    subject = tmpl.subject;
+                if (tmpl?.body)
+                    body = tmpl.body;
+            }
+            const vars = {
+                clientName: name,
+                professionalName,
+                serviceName,
+                date: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+                time: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+                dateTime: formatDateTimePtBR(dt),
+            };
+            await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+            await docRef.update({ reminder3hSent: true, reminder3hSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder3hSending: admin.firestore.FieldValue.delete() });
+            console.log(`[sendHourlyReminders] EMAIL SUCCESS: Sent 3h reminder for appointment ${docSnap.id} to ${email}.`);
+        }
+        catch (e) {
+            console.error(`[sendHourlyReminders] EMAIL FAIL: Error on appointment ${docSnap.id}.`, e);
+            try {
+                await docRef.update({ reminder3hSending: admin.firestore.FieldValue.delete(), reminder3hError: e?.message || String(e) });
+            }
+            catch { }
+        }
+    }
+    console.log(`[sendHourlyReminders] V1 END: Job finished.`);
 });
 // Callable debug helper: allows testing the reminder logic with a custom window and optional dry run
 exports.debugSendDailyReminders = (0, https_1.onCall)({ region: 'us-central1' }, async (req) => {
@@ -746,7 +963,7 @@ exports.debugSendDailyReminders = (0, https_1.onCall)({ region: 'us-central1' },
                 const subject = 'TESTE Lembrete (debug)';
                 const body = `Debug: agendamento em ${dt.toISOString()} para {clientName}`;
                 const vars = { clientName: name };
-                await sendEmailViaBrevo(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
+                await sendEmail(email, name, applyTemplate(subject, vars), applyTemplate(body, vars));
                 await docSnap.ref.set({ reminder24hSent: true, reminderSentAt: admin.firestore.FieldValue.serverTimestamp(), reminder24hSending: admin.firestore.FieldValue.delete() }, { merge: true });
                 out.processed++;
                 info.sent = true;
@@ -1889,7 +2106,7 @@ async function calculateRevenueMetrics(users, transactions, start, end) {
         const monthRevenue = paidTransactions
             .filter(t => {
             const date = t.createdAt ? (t.createdAt.toDate ? t.createdAt.toDate() : new Date(t.createdAt)) : null;
-            return date && date >= monthStart && date <= monthEnd;
+            return date && date >= monthStart && date <= monthEnd && t.status === 'Paid';
         })
             .reduce((sum, t) => sum + (t.amount || 0), 0);
         const monthUsers = users.filter(u => {
@@ -1928,7 +2145,7 @@ async function calculateUserGrowthMetrics(users, start, end) {
         const day = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
         const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
         const dayEnd = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
-        const newCount = users.filter(u => {
+        const dayBookings = users.filter(u => {
             const created = u.createdAt ? (u.createdAt.toDate ? u.createdAt.toDate() : new Date(u.createdAt)) : null;
             return created && created >= dayStart && created < dayEnd;
         }).length;
@@ -1940,7 +2157,7 @@ async function calculateUserGrowthMetrics(users, start, end) {
             const updated = u.updatedAt ? (u.updatedAt.toDate ? u.updatedAt.toDate() : new Date(u.updatedAt)) : null;
             return updated && updated >= dayStart && updated < dayEnd && u.subscriptionStatus === 'Inativo';
         }).length;
-        newUsers.push({ date: day.toISOString().split('T')[0], count: newCount });
+        newUsers.push({ date: day.toISOString().split('T')[0], count: dayBookings });
         activeUsers.push({ date: day.toISOString().split('T')[0], count: activeCount });
         churnedUsers.push({ date: day.toISOString().split('T')[0], count: churnedCount });
     }
@@ -2126,7 +2343,7 @@ exports.notifyTrialsEndingToday = (0, scheduler_1.onSchedule)({ schedule: 'every
                 // Send email if available (best-effort)
                 if (email) {
                     try {
-                        await sendEmailViaBrevo(email, name || email, subject, html);
+                        await sendEmail(email, name || email, subject, html);
                     }
                     catch (e) {
                         console.warn('notifyTrialsEndingToday: email send failed for', u.id, e);
@@ -2162,982 +2379,40 @@ exports.notifyTrialsEndingToday = (0, scheduler_1.onSchedule)({ schedule: 'every
         console.error('notifyTrialsEndingToday error', e);
     }
 });
-// ============= RESOURCE MANAGEMENT FUNCTIONS =============
-// Plan limits configuration
-const PLAN_LIMITS = {
-    'Trial': {
-        planName: 'Trial',
-        quotas: {
-            storage: { limit: 100, used: 0, unlimited: false }, // 100MB
-            bandwidth: { limit: 1, used: 0, unlimited: false }, // 1GB
-            apiCalls: { limit: 1000, used: 0, unlimited: false },
-            users: { limit: 50, used: 0, unlimited: false },
-            appointments: { limit: 100, used: 0, unlimited: false }
-        },
-        features: ['basic_booking', 'email_notifications'],
-        rateLimit: {
-            requestsPerMinute: 30,
-            requestsPerHour: 1000,
-            requestsPerDay: 5000
-        }
-    },
-    'Profissional': {
-        planName: 'Profissional',
-        quotas: {
-            storage: { limit: 1000, used: 0, unlimited: false }, // 1GB
-            bandwidth: { limit: 10, used: 0, unlimited: false }, // 10GB
-            apiCalls: { limit: 10000, used: 0, unlimited: false },
-            users: { limit: 500, used: 0, unlimited: false },
-            appointments: { limit: 2000, used: 0, unlimited: false }
-        },
-        features: ['advanced_booking', 'analytics', 'automation', 'custom_branding'],
-        rateLimit: {
-            requestsPerMinute: 100,
-            requestsPerHour: 5000,
-            requestsPerDay: 50000
-        }
-    },
-    'Enterprise': {
-        planName: 'Enterprise',
-        quotas: {
-            storage: { limit: 0, used: 0, unlimited: true },
-            bandwidth: { limit: 0, used: 0, unlimited: true },
-            apiCalls: { limit: 0, used: 0, unlimited: true },
-            users: { limit: 0, used: 0, unlimited: true },
-            appointments: { limit: 0, used: 0, unlimited: true }
-        },
-        features: ['everything', 'priority_support', 'white_label', 'api_access'],
-        rateLimit: {
-            requestsPerMinute: 1000,
-            requestsPerHour: 50000,
-            requestsPerDay: 1000000
-        }
+// --- Billing Kill Switch Function ---
+// Commented out temporarily due to import issues
+/*
+const billing = new Billing.CloudBillingClient();
+// The project ID is automatically available in the Cloud Functions environment
+const PROJECT_ID = process.env.GCLOUD_PROJECT;
+const PROJECT_NAME = `projects/${PROJECT_ID}`;
+
+export const stopBilling = onMessagePublished('billing-kill-switch', async (event) => {
+  const pubsubMessage = event.data.message;
+  const budgetData = pubsubMessage.json;
+
+  if (budgetData.costAmount <= budgetData.budgetAmount) {
+    console.log(`No action taken. Cost ${budgetData.costAmount} is not over budget ${budgetData.budgetAmount}.`);
+    return;
+  }
+
+  console.log(`BUDGET ALERT: Cost ${budgetData.costAmount} has exceeded budget ${budgetData.budgetAmount}. Disabling billing for project ${PROJECT_ID}.`);
+
+  try {
+    const [projects] = await billing.listProjects();
+    const project = projects.find((p: any) => p.projectId === PROJECT_ID);
+
+    if (project && project.billingEnabled) {
+      const [res] = await billing.updateProjectBillingInfo({
+        name: PROJECT_NAME,
+        projectBillingInfo: { billingAccountName: '' },
+      });
+      console.log(`SUCCESS: Billing has been disabled for project ${PROJECT_ID}. Response: ${JSON.stringify(res)}`);
+    } else {
+      console.log(`Billing was already disabled for project ${PROJECT_ID} or the project was not found.`);
     }
-};
-// Get resource usage for all users
-exports.getResourceUsage = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    // Apply admin rate limiting
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getResourceUsage', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const usersSnapshot = await admin.firestore().collection('users').get();
-        const resourceUsage = [];
-        for (const userDoc of usersSnapshot.docs) {
-            const userData = userDoc.data();
-            const userId = userDoc.id;
-            // Calculate current usage
-            const usage = await calculateUserResourceUsage(userId, userData);
-            resourceUsage.push(usage);
-        }
-        return resourceUsage;
-    }
-    catch (error) {
-        console.error('Error getting resource usage:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get resource usage');
-    }
+  } catch (err) {
+    console.error('FATAL: FAILED TO DISABLE BILLING. IMMEDIATE MANUAL ACTION REQUIRED.', err);
+  }
 });
-// Update user resource quotas
-exports.updateUserQuotas = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    // Apply admin rate limiting
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'updateUserQuotas', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { userId, quotas } = data;
-    if (!userId || !quotas) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing userId or quotas');
-    }
-    try {
-        await admin.firestore().collection('users').doc(userId).update({
-            customQuotas: quotas,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-        return { success: true };
-    }
-    catch (error) {
-        console.error('Error updating user quotas:', error);
-        throw new https_1.HttpsError('internal', 'Failed to update quotas');
-    }
-});
-// Get resource violations
-exports.getResourceViolations = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const violationsSnapshot = await admin.firestore()
-            .collection('resourceViolations')
-            .where('resolved', '==', false)
-            .orderBy('timestamp', 'desc')
-            .limit(100)
-            .get();
-        const violations = violationsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return violations;
-    }
-    catch (error) {
-        console.error('Error getting resource violations:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get violations');
-    }
-});
-// Monitor external service usage
-exports.getExternalServiceUsage = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        // Get Firebase usage (simplified - in production use Firebase billing APIs)
-        const usersCount = (await admin.firestore().collection('users').count().get()).data().count;
-        const appointmentsCount = (await admin.firestore().collectionGroup('appointments').count().get()).data().count;
-        // Estimate costs based on usage
-        const firebaseUsage = {
-            reads: usersCount * 10, // Estimated reads per user
-            writes: appointmentsCount * 2, // Estimated writes per appointment
-            storage: usersCount * 0.5, // MB per user
-            functions: appointmentsCount * 3, // Function calls per appointment
-            cost: (usersCount * 0.01) + (appointmentsCount * 0.005) // Estimated cost
-        };
-        // Get Stripe usage (if configured)
-        let stripeUsage = { transactions: 0, webhooks: 0, cost: 0 };
-        try {
-            const stripeConfig = await admin.firestore().doc('platform/stripe').get();
-            if (stripeConfig.exists) {
-                const transactionsCount = (await admin.firestore().collectionGroup('transactions').count().get()).data().count;
-                stripeUsage = {
-                    transactions: transactionsCount,
-                    webhooks: transactionsCount * 2, // Estimated webhooks
-                    cost: transactionsCount * 0.3 // Stripe fee estimate
-                };
-            }
-        }
-        catch (e) {
-            console.log('Stripe config not found');
-        }
-        // Get email usage
-        let brevoUsage = { emails: 0, cost: 0 };
-        try {
-            const emailsCount = usersCount * 5; // Estimated emails per user
-            brevoUsage = {
-                emails: emailsCount,
-                cost: emailsCount * 0.001 // Estimated cost per email
-            };
-        }
-        catch (e) {
-            console.log('Email usage calculation failed');
-        }
-        const externalUsage = {
-            firebase: firebaseUsage,
-            stripe: stripeUsage,
-            brevo: brevoUsage,
-            mercadoPago: { transactions: 0, cost: 0 } // Placeholder
-        };
-        return externalUsage;
-    }
-    catch (error) {
-        console.error('Error getting external service usage:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get external service usage');
-    }
-});
-// Get cost alerts
-exports.getCostAlerts = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const alertsSnapshot = await admin.firestore()
-            .collection('costAlerts')
-            .where('acknowledged', '==', false)
-            .orderBy('createdAt', 'desc')
-            .get();
-        const alerts = alertsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return alerts;
-    }
-    catch (error) {
-        console.error('Error getting cost alerts:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get cost alerts');
-    }
-});
-// Create cost alert
-exports.createCostAlert = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await assertIsPlatformAdmin(auth.uid);
-    const { service, threshold, alertType } = data;
-    if (!service || !threshold || !alertType) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    try {
-        const alert = {
-            service,
-            threshold,
-            currentAmount: 0,
-            alertType,
-            severity: 'Info',
-            message: `Cost alert for ${service} with threshold $${threshold}`,
-            createdAt: new Date(),
-            acknowledged: false
-        };
-        const docRef = await admin.firestore().collection('costAlerts').add(alert);
-        return { id: docRef.id, ...alert };
-    }
-    catch (error) {
-        console.error('Error creating cost alert:', error);
-        throw new https_1.HttpsError('internal', 'Failed to create cost alert');
-    }
-});
-// Resource monitoring scheduled function
-exports.monitorResources = (0, scheduler_1.onSchedule)('every 1 hours', async (event) => {
-    try {
-        console.log('Starting resource monitoring...');
-        const usersSnapshot = await admin.firestore().collection('users').get();
-        const violations = [];
-        for (const userDoc of usersSnapshot.docs) {
-            const userData = userDoc.data();
-            const userId = userDoc.id;
-            // Check resource usage
-            const usage = await calculateUserResourceUsage(userId, userData);
-            // Check for violations
-            const userViolations = checkResourceViolations(usage);
-            violations.push(...userViolations);
-            // Update user resource status
-            await admin.firestore().collection('users').doc(userId).update({
-                resourceStatus: usage.status,
-                lastResourceCheck: admin.firestore.FieldValue.serverTimestamp()
-            });
-        }
-        // Save violations to Firestore
-        const batch = admin.firestore().batch();
-        violations.forEach(violation => {
-            const docRef = admin.firestore().collection('resourceViolations').doc();
-            batch.set(docRef, violation);
-        });
-        if (violations.length > 0) {
-            await batch.commit();
-            console.log(`Created ${violations.length} resource violations`);
-        }
-        // Generate resource monitoring report
-        const monitoring = await generateResourceMonitoring();
-        await admin.firestore().collection('resourceMonitoring').add(monitoring);
-        console.log('Resource monitoring completed');
-    }
-    catch (error) {
-        console.error('Error in resource monitoring:', error);
-    }
-});
-// Helper function to calculate user resource usage
-async function calculateUserResourceUsage(userId, userData) {
-    const plan = userData.plan || 'Trial';
-    const planLimits = PLAN_LIMITS[plan] || PLAN_LIMITS['Trial'];
-    const customQuotas = userData.customQuotas;
-    // Use custom quotas if available, otherwise use plan defaults
-    const quotas = customQuotas || planLimits.quotas;
-    // Calculate actual usage
-    const storage = await calculateUserStorage(userId);
-    const bandwidth = await calculateUserBandwidth(userId);
-    const apiCalls = await calculateUserApiCalls(userId);
-    const appointments = await calculateUserAppointments(userId);
-    const currentUsage = {
-        userId,
-        userEmail: userData.email || 'unknown',
-        plan,
-        quotas: {
-            storage: { ...quotas.storage, used: storage },
-            bandwidth: { ...quotas.bandwidth, used: bandwidth },
-            apiCalls: { ...quotas.apiCalls, used: apiCalls },
-            users: { ...quotas.users, used: 1 }, // User themselves
-            appointments: { ...quotas.appointments, used: appointments }
-        },
-        lastUpdated: new Date(),
-        status: 'Normal',
-        violations: []
-    };
-    // Determine status based on usage
-    const overLimits = Object.entries(currentUsage.quotas).filter(([key, quota]) => {
-        if (quota.unlimited)
-            return false;
-        return quota.used > quota.limit;
-    });
-    const nearLimits = Object.entries(currentUsage.quotas).filter(([key, quota]) => {
-        if (quota.unlimited)
-            return false;
-        return quota.used > quota.limit * 0.8 && quota.used <= quota.limit;
-    });
-    if (overLimits.length > 0) {
-        currentUsage.status = 'OverLimit';
-    }
-    else if (nearLimits.length > 0) {
-        currentUsage.status = 'Warning';
-    }
-    return currentUsage;
-}
-// Helper functions for usage calculation
-async function calculateUserStorage(userId) {
-    // Simplified storage calculation
-    try {
-        const userDoc = await admin.firestore().collection('users').doc(userId).get();
-        const appointmentsSnapshot = await admin.firestore()
-            .collection('users').doc(userId)
-            .collection('appointments').get();
-        // Estimate storage based on document count and average size
-        const docCount = 1 + appointmentsSnapshot.size;
-        return docCount * 0.01; // 0.01MB per document estimate
-    }
-    catch (error) {
-        return 0;
-    }
-}
-async function calculateUserBandwidth(userId) {
-    // Simplified bandwidth calculation
-    try {
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        // Estimate based on recent activity (would need actual request logs)
-        const appointmentsSnapshot = await admin.firestore()
-            .collection('users').doc(userId)
-            .collection('appointments')
-            .where('createdAt', '>=', monthStart)
-            .get();
-        return appointmentsSnapshot.size * 0.001; // 1KB per request estimate
-    }
-    catch (error) {
-        return 0;
-    }
-}
-async function calculateUserApiCalls(userId) {
-    // Simplified API calls calculation
-    try {
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        // Estimate based on appointments and user activity
-        const appointmentsSnapshot = await admin.firestore()
-            .collection('users').doc(userId)
-            .collection('appointments')
-            .where('createdAt', '>=', monthStart)
-            .get();
-        return appointmentsSnapshot.size * 5; // 5 API calls per appointment estimate
-    }
-    catch (error) {
-        return 0;
-    }
-}
-async function calculateUserAppointments(userId) {
-    try {
-        const now = new Date();
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const appointmentsSnapshot = await admin.firestore()
-            .collection('users').doc(userId)
-            .collection('appointments')
-            .where('createdAt', '>=', monthStart)
-            .get();
-        return appointmentsSnapshot.size;
-    }
-    catch (error) {
-        return 0;
-    }
-}
-// Check for resource violations
-function checkResourceViolations(usage) {
-    const violations = [];
-    Object.entries(usage.quotas).forEach(([resourceType, quota]) => {
-        if (quota.unlimited)
-            return;
-        if (quota.used > quota.limit) {
-            violations.push({
-                userId: usage.userId,
-                type: resourceType,
-                severity: 'High',
-                message: `${resourceType} usage (${quota.used}) exceeds limit (${quota.limit})`,
-                timestamp: new Date(),
-                resolved: false,
-                action: 'throttle'
-            });
-        }
-        else if (quota.used > quota.limit * 0.9) {
-            violations.push({
-                userId: usage.userId,
-                type: resourceType,
-                severity: 'Medium',
-                message: `${resourceType} usage (${quota.used}) is near limit (${quota.limit})`,
-                timestamp: new Date(),
-                resolved: false,
-                action: 'notify'
-            });
-        }
-    });
-    return violations;
-}
-// Generate resource monitoring report
-async function generateResourceMonitoring() {
-    const usersSnapshot = await admin.firestore().collection('users').get();
-    const activeUsers = usersSnapshot.docs.filter(doc => {
-        const data = doc.data();
-        const lastLogin = data.lastLogin ? (data.lastLogin.toDate ? data.lastLogin.toDate() : new Date(data.lastLogin)) : null;
-        if (!lastLogin)
-            return false;
-        const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        return lastLogin > dayAgo;
-    }).length;
-    // Calculate totals
-    let totalStorage = 0;
-    let totalBandwidth = 0;
-    let totalApiCalls = 0;
-    for (const userDoc of usersSnapshot.docs) {
-        const userId = userDoc.id;
-        totalStorage += await calculateUserStorage(userId);
-        totalBandwidth += await calculateUserBandwidth(userId);
-        totalApiCalls += await calculateUserApiCalls(userId);
-    }
-    // Get external service usage
-    const externalUsage = {
-        firebase: {
-            reads: totalApiCalls * 2,
-            writes: totalApiCalls,
-            storage: totalStorage,
-            functions: totalApiCalls * 0.5,
-            cost: totalStorage * 0.026 + totalApiCalls * 0.0006
-        },
-        stripe: { transactions: 0, webhooks: 0, cost: 0 },
-        brevo: { emails: usersSnapshot.size * 5, cost: usersSnapshot.size * 0.005 },
-        mercadoPago: { transactions: 0, cost: 0 }
-    };
-    const costBreakdown = {
-        firebase: externalUsage.firebase.cost,
-        stripe: externalUsage.stripe.cost,
-        brevo: externalUsage.brevo.cost,
-        mercadoPago: externalUsage.mercadoPago.cost
-    };
-    const totalCost = Object.values(costBreakdown).reduce((sum, cost) => sum + cost, 0);
-    return {
-        timestamp: new Date(),
-        totalUsers: usersSnapshot.size,
-        activeUsers,
-        totalStorage,
-        totalBandwidth,
-        totalApiCalls,
-        externalServices: externalUsage,
-        costBreakdown,
-        projectedMonthlyCost: totalCost * 30 // Daily cost * 30
-    };
-}
-// Get rate limiting statistics
-exports.getRateLimitStats = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    // Apply admin rate limiting
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getRateLimitStats', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const stats = {
-            userRateLimiter: rateLimiter_1.userRateLimiter.getStats(),
-            adminRateLimiter: rateLimiter_1.adminRateLimiter.getStats(),
-            globalRateLimiter: require('./rateLimiter').globalRateLimiter.getStats()
-        };
-        return stats;
-    }
-    catch (error) {
-        console.error('Error getting rate limit stats:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get rate limit statistics');
-    }
-});
-// ============= CONTENT MANAGEMENT FUNCTIONS =============
-// Email Templates Management
-exports.getEmailTemplates = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getEmailTemplates', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const templatesSnapshot = await admin.firestore()
-            .collection('emailTemplates')
-            .orderBy('createdAt', 'desc')
-            .get();
-        const templates = templatesSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return templates;
-    }
-    catch (error) {
-        console.error('Error getting email templates:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get email templates');
-    }
-});
-exports.createEmailTemplate = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'createEmailTemplate', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { name, subject, content, type, category, variables } = data;
-    if (!name || !subject || !content || !type) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    try {
-        // Generate HTML content from markdown or rich text
-        const htmlContent = content; // In production, you'd use a markdown parser
-        const template = {
-            name,
-            subject,
-            content,
-            htmlContent,
-            type,
-            variables: variables || [],
-            isActive: true,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            createdBy: auth.uid,
-            category: category || 'general'
-        };
-        const docRef = await admin.firestore().collection('emailTemplates').add(template);
-        return { id: docRef.id, ...template };
-    }
-    catch (error) {
-        console.error('Error creating email template:', error);
-        throw new https_1.HttpsError('internal', 'Failed to create email template');
-    }
-});
-exports.updateEmailTemplate = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'updateEmailTemplate', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { templateId, updates } = data;
-    if (!templateId || !updates) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing templateId or updates');
-    }
-    try {
-        const updateData = {
-            ...updates,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        await admin.firestore()
-            .collection('emailTemplates')
-            .doc(templateId)
-            .update(updateData);
-        return { success: true };
-    }
-    catch (error) {
-        console.error('Error updating email template:', error);
-        throw new https_1.HttpsError('internal', 'Failed to update email template');
-    }
-});
-// Landing Pages Management
-exports.getLandingPages = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getLandingPages', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const pagesSnapshot = await admin.firestore()
-            .collection('landingPages')
-            .orderBy('createdAt', 'desc')
-            .get();
-        const pages = pagesSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return pages;
-    }
-    catch (error) {
-        console.error('Error getting landing pages:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get landing pages');
-    }
-});
-exports.createLandingPage = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'createLandingPage', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { title, slug, content, metaTitle, metaDescription, keywords, sections } = data;
-    if (!title || !slug || !content) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    try {
-        // Check if slug already exists
-        const existingPage = await admin.firestore()
-            .collection('landingPages')
-            .where('slug', '==', slug)
-            .get();
-        if (!existingPage.empty) {
-            throw new https_1.HttpsError('already-exists', 'Slug already exists');
-        }
-        const htmlContent = content; // In production, you'd use a markdown parser
-        const page = {
-            title,
-            slug,
-            content,
-            htmlContent,
-            metaTitle: metaTitle || title,
-            metaDescription: metaDescription || '',
-            keywords: keywords || [],
-            isPublished: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            createdBy: auth.uid,
-            sections: sections || [],
-            seoScore: 0, // Would be calculated based on content analysis
-            analytics: {
-                views: 0,
-                conversions: 0,
-                bounceRate: 0
-            }
-        };
-        const docRef = await admin.firestore().collection('landingPages').add(page);
-        return { id: docRef.id, ...page };
-    }
-    catch (error) {
-        console.error('Error creating landing page:', error);
-        throw new https_1.HttpsError('internal', 'Failed to create landing page');
-    }
-});
-exports.publishLandingPage = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'publishLandingPage', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { pageId, isPublished } = data;
-    if (!pageId || typeof isPublished !== 'boolean') {
-        throw new https_1.HttpsError('invalid-argument', 'Missing pageId or isPublished');
-    }
-    try {
-        const updateData = {
-            isPublished,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        if (isPublished) {
-            updateData.publishedAt = admin.firestore.FieldValue.serverTimestamp();
-        }
-        await admin.firestore()
-            .collection('landingPages')
-            .doc(pageId)
-            .update(updateData);
-        return { success: true };
-    }
-    catch (error) {
-        console.error('Error publishing landing page:', error);
-        throw new https_1.HttpsError('internal', 'Failed to publish landing page');
-    }
-});
-// Wiki Management
-exports.getWikiPages = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getWikiPages', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const pagesSnapshot = await admin.firestore()
-            .collection('wikiPages')
-            .orderBy('createdAt', 'desc')
-            .get();
-        const pages = pagesSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return pages;
-    }
-    catch (error) {
-        console.error('Error getting wiki pages:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get wiki pages');
-    }
-});
-exports.createWikiPage = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'createWikiPage', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { title, content, category, tags, parentId } = data;
-    if (!title || !content || !category) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    try {
-        const htmlContent = content; // In production, you'd use a markdown parser
-        const page = {
-            title,
-            content,
-            htmlContent,
-            category,
-            tags: tags || [],
-            isPublished: false,
-            version: 1,
-            parentId: parentId || undefined,
-            children: [],
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            createdBy: auth.uid,
-            lastEditedBy: auth.uid,
-            viewCount: 0,
-            searchTerms: title.toLowerCase().split(' ').concat(tags || [])
-        };
-        const docRef = await admin.firestore().collection('wikiPages').add(page);
-        // Update parent page's children array if parentId exists
-        if (parentId) {
-            await admin.firestore()
-                .collection('wikiPages')
-                .doc(parentId)
-                .update({
-                children: admin.firestore.FieldValue.arrayUnion(docRef.id)
-            });
-        }
-        return { id: docRef.id, ...page };
-    }
-    catch (error) {
-        console.error('Error creating wiki page:', error);
-        throw new https_1.HttpsError('internal', 'Failed to create wiki page');
-    }
-});
-// Announcements Management
-exports.getAnnouncements = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getAnnouncements', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        const announcementsSnapshot = await admin.firestore()
-            .collection('announcements')
-            .orderBy('createdAt', 'desc')
-            .get();
-        const announcements = announcementsSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        return announcements;
-    }
-    catch (error) {
-        console.error('Error getting announcements:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get announcements');
-    }
-});
-exports.createAnnouncement = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'createAnnouncement', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    const { title, content, type, priority, targetAudience, targetUserIds, targetPlans, startDate, endDate, isDismissible, showOnDashboard, showAsPopup } = data;
-    if (!title || !content || !type || !priority || !targetAudience || !startDate) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    try {
-        const htmlContent = content; // In production, you'd use a markdown parser
-        const announcement = {
-            title,
-            content,
-            htmlContent,
-            type,
-            priority,
-            targetAudience,
-            targetUserIds: targetUserIds || undefined,
-            targetPlans: targetPlans || undefined,
-            startDate: new Date(startDate),
-            endDate: endDate ? new Date(endDate) : undefined,
-            isActive: true,
-            isDismissible: isDismissible !== false,
-            showOnDashboard: showOnDashboard !== false,
-            showAsPopup: showAsPopup === true,
-            createdAt: new Date(),
-            createdBy: auth.uid,
-            viewCount: 0,
-            dismissedBy: []
-        };
-        const docRef = await admin.firestore().collection('announcements').add(announcement);
-        return { id: docRef.id, ...announcement };
-    }
-    catch (error) {
-        console.error('Error creating announcement:', error);
-        throw new https_1.HttpsError('internal', 'Failed to create announcement');
-    }
-});
-// Get active announcements for users
-exports.getActiveAnnouncements = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getActiveAnnouncements', rateLimiter_1.userRateLimiter);
-    try {
-        const now = new Date();
-        // Get user data to check plan
-        const userDoc = await admin.firestore().collection('users').doc(auth.uid).get();
-        const userData = userDoc.data();
-        const userPlan = userData?.plan || 'Trial';
-        const isAdmin = userData?.role === 'admin';
-        const announcementsSnapshot = await admin.firestore()
-            .collection('announcements')
-            .where('isActive', '==', true)
-            .where('startDate', '<=', now)
-            .get();
-        const announcements = announcementsSnapshot.docs
-            .map(doc => ({ id: doc.id, ...doc.data() }))
-            .filter(announcement => {
-            // Check if announcement has expired
-            if (announcement.endDate && announcement.endDate < now) {
-                return false;
-            }
-            // Check target audience
-            if (announcement.targetAudience === 'all') {
-                return true;
-            }
-            else if (announcement.targetAudience === 'admins' && isAdmin) {
-                return true;
-            }
-            else if (announcement.targetAudience === 'users' && !isAdmin) {
-                return true;
-            }
-            else if (announcement.targetAudience === 'specific') {
-                // Check if user is in target list or has target plan
-                const inTargetUsers = announcement.targetUserIds?.includes(auth.uid);
-                const hasTargetPlan = announcement.targetPlans?.includes(userPlan);
-                return inTargetUsers || hasTargetPlan;
-            }
-            return false;
-        })
-            .filter(announcement => {
-            // Filter out dismissed announcements if they are dismissible
-            if (announcement.isDismissible && announcement.dismissedBy.includes(auth.uid)) {
-                return false;
-            }
-            return true;
-        });
-        return announcements;
-    }
-    catch (error) {
-        console.error('Error getting active announcements:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get active announcements');
-    }
-});
-// Dismiss announcement
-exports.dismissAnnouncement = (0, https_1.onCall)(async (request) => {
-    const { auth, data } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'dismissAnnouncement', rateLimiter_1.userRateLimiter);
-    const { announcementId } = data;
-    if (!announcementId) {
-        throw new https_1.HttpsError('invalid-argument', 'Missing announcementId');
-    }
-    try {
-        await admin.firestore()
-            .collection('announcements')
-            .doc(announcementId)
-            .update({
-            dismissedBy: admin.firestore.FieldValue.arrayUnion(auth.uid)
-        });
-        return { success: true };
-    }
-    catch (error) {
-        console.error('Error dismissing announcement:', error);
-        throw new https_1.HttpsError('internal', 'Failed to dismiss announcement');
-    }
-});
-// Content Analytics
-exports.getContentAnalytics = (0, https_1.onCall)(async (request) => {
-    const { auth } = request;
-    if (!auth?.uid)
-        throw new https_1.HttpsError('unauthenticated', 'Authentication required');
-    await (0, rateLimiter_1.applyRateLimit)(auth.uid, 'getContentAnalytics', rateLimiter_1.adminRateLimiter);
-    await assertIsPlatformAdmin(auth.uid);
-    try {
-        // Get email templates stats
-        const templatesSnapshot = await admin.firestore().collection('emailTemplates').get();
-        const templates = templatesSnapshot.docs.map(doc => doc.data());
-        // Get landing pages stats
-        const pagesSnapshot = await admin.firestore().collection('landingPages').get();
-        const pages = pagesSnapshot.docs.map(doc => doc.data());
-        // Get wiki pages stats
-        const wikiSnapshot = await admin.firestore().collection('wikiPages').get();
-        const wikiPages = wikiSnapshot.docs.map(doc => doc.data());
-        // Get announcements stats
-        const announcementsSnapshot = await admin.firestore().collection('announcements').get();
-        const announcements = announcementsSnapshot.docs.map(doc => doc.data());
-        const analytics = {
-            emailTemplates: {
-                totalTemplates: templates.length,
-                activeTemplates: templates.filter((t) => t.isActive).length,
-                topPerforming: [], // Would be populated with actual email performance data
-                categoryStats: templates.reduce((acc, t) => {
-                    acc[t.category] = (acc[t.category] || 0) + 1;
-                    return acc;
-                }, {})
-            },
-            landingPages: {
-                totalPages: pages.length,
-                publishedPages: pages.filter(p => p.isPublished).length,
-                totalViews: pages.reduce((sum, p) => sum + (p.analytics?.views || 0), 0),
-                totalConversions: pages.reduce((sum, p) => sum + (p.analytics?.conversions || 0), 0),
-                averageBounceRate: pages.length > 0
-                    ? pages.reduce((sum, p) => sum + (p.analytics?.bounceRate || 0), 0) / pages.length
-                    : 0,
-                topPerforming: pages
-                    .filter(p => p.analytics)
-                    .sort((a, b) => (b.analytics?.views || 0) - (a.analytics?.views || 0))
-                    .slice(0, 5)
-                    .map(p => ({
-                    id: p.id,
-                    title: p.title,
-                    views: p.analytics?.views || 0,
-                    conversions: p.analytics?.conversions || 0
-                }))
-            },
-            wiki: {
-                totalPages: wikiPages.length,
-                publishedPages: wikiPages.filter(p => p.isPublished).length,
-                totalViews: wikiPages.reduce((sum, p) => sum + p.viewCount, 0),
-                topViewed: wikiPages
-                    .sort((a, b) => b.viewCount - a.viewCount)
-                    .slice(0, 5)
-                    .map(p => ({
-                    id: p.id,
-                    title: p.title,
-                    views: p.viewCount
-                })),
-                categoryStats: wikiPages.reduce((acc, p) => {
-                    acc[p.category] = (acc[p.category] || 0) + 1;
-                    return acc;
-                }, {})
-            },
-            announcements: {
-                totalAnnouncements: announcements.length,
-                activeAnnouncements: announcements.filter(a => a.isActive).length,
-                totalViews: announcements.reduce((sum, a) => sum + a.viewCount, 0),
-                averageDismissalRate: announcements.length > 0
-                    ? announcements.reduce((sum, a) => sum + (a.dismissedBy?.length || 0), 0) / announcements.length
-                    : 0,
-                topPerforming: announcements
-                    .filter(a => a.viewCount)
-                    .sort((a, b) => b.viewCount - a.viewCount)
-                    .slice(0, 5)
-                    .map(a => ({
-                    id: a.id,
-                    title: a.title,
-                    views: a.viewCount
-                }))
-            }
-        };
-        return analytics;
-    }
-    catch (error) {
-        console.error('Error getting content analytics:', error);
-        throw new https_1.HttpsError('internal', 'Failed to get content analytics');
-    }
-});
+*/
