@@ -766,12 +766,7 @@ export interface FeatureFlags {
 }
 
 // Types for Automations (Admin)
-export interface BrevoSettings {
-    apiKey: string;
-    isConnected: boolean;
-    senderEmail?: string;
-    senderName?: string;
-}
+// Deprecated: BrevoSettings removed; SMTP is used server-side only.
 
 export type CommunicationType = 'Confirmação' | 'Lembrete' | 'Follow-up' | 'Pós-Atendimento' | 'Aniversário' | 'Personalizado';
 

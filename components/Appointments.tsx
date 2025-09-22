@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Appointment, AppointmentStatus, Client, Service, ClientCategory, BrevoSettings } from '../types';
+import { Appointment, AppointmentStatus, Client, Service, ClientCategory } from '../types';
 import { analyzeNoShowRisk, generateAppointmentCommunication } from '../services/geminiService';
-import { getBrevoConnectionStatus, sendEmail, sendWhatsApp } from '../services/brevoService';
+import { getBrevoConnectionStatus, sendEmail } from '../services/brevoService';
 import { doc as fsDoc, getDoc as fsGetDoc } from 'firebase/firestore';
 import { Calendar, Tag, User, Clock, DollarSign, MoreVertical, Plus, Edit, Trash, List, X, Search, CheckSquare, ArrowLeft, ArrowRight, Loader, Brain, MessageCircle, Copy, Check, Send, AlertTriangle } from './Icons';
 import { db } from '@/services/firebase';
@@ -1096,7 +1096,7 @@ const AppointmentModal: React.FC<AppointmentModalProps> = ({ appointment, onSave
 
 const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => void, clients: Client[] }> = ({ appointment, onClose, clients }) => {
     const [isLoading, setIsLoading] = useState(false);
-    const [isSending, setIsSending] = useState<'email' | 'whatsapp' | null>(null);
+    const [isSending, setIsSending] = useState<'email' | null>(null);
     const [commType, setCommType] = useState<'confirmation' | 'reminder' | 'followup' | null>(null);
     const [generatedComm, setGeneratedComm] = useState<{ subject: string; body: string } | null>(null);
     const [isBrevoConnected, setIsBrevoConnected] = useState(false);
@@ -1128,7 +1128,7 @@ const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => vo
         }
     };
 
-    const handleSend = async (channel: 'email' | 'whatsapp') => {
+    const handleSend = async (channel: 'email') => {
         if (!generatedComm) return;
         
         const client = clients.find(c => c.name === appointment.clientName);
@@ -1140,39 +1140,15 @@ const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => vo
         setIsSending(channel);
         setStatusMessage(null);
 
-        if (channel === 'email') {
-            try {
-                const response = await sendEmail(client, generatedComm.subject, generatedComm.body);
-                setStatusMessage({ type: 'success', text: response });
-                setTimeout(() => setStatusMessage(null), 4000);
-            } catch (e) {
-                setStatusMessage({ type: 'error', text: 'Falha ao enviar a mensagem.' });
-                console.error(e);
-            } finally {
-                setIsSending(null);
-            }
-        } else if (channel === 'whatsapp') {
-            // Prioritize phone from client record, fallback to appointment record
-            const phone = client.phone || appointment.clientPhone;
-            if (!phone) {
-                setStatusMessage({ type: 'error', text: 'O número de telefone do cliente não foi encontrado.' });
-                setIsSending(null);
-                return;
-            }
-            
-            // Clean the phone number: remove all non-digit characters
-            const cleanedPhone = phone.replace(/\D/g, '');
-            const message = encodeURIComponent(generatedComm.body);
-            const whatsappUrl = `https://wa.me/${cleanedPhone}?text=${message}`;
-            
-            window.open(whatsappUrl, '_blank');
-            setStatusMessage({ type: 'success', text: 'WhatsApp aberto para envio manual.' });
-            
-            // Reset sending state after a short delay
-            setTimeout(() => {
-                setIsSending(null);
-                setStatusMessage(null);
-            }, 3000);
+        try {
+            const response = await sendEmail(client, generatedComm.subject, generatedComm.body);
+            setStatusMessage({ type: 'success', text: response });
+            setTimeout(() => setStatusMessage(null), 4000);
+        } catch (e) {
+            setStatusMessage({ type: 'error', text: 'Falha ao enviar a mensagem.' });
+            console.error(e);
+        } finally {
+            setIsSending(null);
         }
     };
 
@@ -1204,7 +1180,7 @@ const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => vo
                 {!isBrevoConnected && (
                     <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/40 border border-yellow-300 dark:border-yellow-700 text-yellow-800 dark:text-yellow-300 text-sm rounded-lg flex items-center gap-2">
                         <AlertTriangle className="h-5 w-5"/>
-                        <span>A conexão com o Brevo está inativa. Configure-a no painel de Automações para habilitar o envio.</span>
+                        <span>Configuração SMTP ausente. Preencha <code>platform/settings.smtp</code> no Firestore para habilitar o envio de e-mails.</span>
                     </div>
                 )}
                 
@@ -1214,13 +1190,9 @@ const CommunicationModal: React.FC<{ appointment: Appointment, onClose: () => vo
                     </div>
                 )}
 
-                 <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
+                <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
                     <button type="button" onClick={onClose} className="py-2 px-4 rounded-lg bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-500 order-last sm:order-first">Fechar</button>
-                    <button onClick={() => handleSend('whatsapp')} disabled={!generatedComm || isSending !== null || !isBrevoConnected} className="py-2 px-4 rounded-lg bg-green-500 text-white font-semibold hover:bg-green-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
-                       {isSending === 'whatsapp' ? <Loader className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                       Enviar por WhatsApp
-                    </button>
-                     <button onClick={() => handleSend('email')} disabled={!generatedComm || isSending !== null || !isBrevoConnected} className="py-2 px-4 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                            <button onClick={() => handleSend('email')} disabled={!generatedComm || isSending !== null || !isBrevoConnected} className="py-2 px-4 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
                        {isSending === 'email' ? <Loader className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                        Enviar por E-mail
                     </button>

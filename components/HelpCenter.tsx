@@ -389,9 +389,9 @@ const HelpCenter: React.FC = () => {
     const defaultFaqs: FAQItem[] = [
         { id: 'faq_calendar_sync', question: 'Como sincronizar minha agenda com o Google/Apple?', answer: 'A sincronização direta de calendário está em desenvolvimento. Enquanto isso, gerencie seus horários pela plataforma e ative notificações para reduzir conflitos.' },
         { id: 'faq_create_service', question: 'Como cadastrar um novo serviço?', answer: 'Acesse Serviços > Adicionar Serviço. Defina nome, duração, preço e modalidade (Online/Presencial) e ative para aparecer na página pública.' },
-        { id: 'faq_public_page', question: 'Como funciona minha página pública de agendamentos?', answer: 'Ao ativar serviços e disponibilidade, sua página pública exibe opções para que clientes escolham um horário. Compartilhe o link no Instagram, WhatsApp e site.' },
+    { id: 'faq_public_page', question: 'Como funciona minha página pública de agendamentos?', answer: 'Ao ativar serviços e disponibilidade, sua página pública exibe opções para que clientes escolham um horário. Compartilhe o link no Instagram e no seu site.' },
         { id: 'faq_payments', question: 'Posso receber pagamentos online?', answer: 'Sim. Conecte um gateway compatível (ex.: provedor de cartão de crédito ou Pix) em Perfil > Gateways. Depois, ative “Pagamento online” nos serviços desejados.' },
-        { id: 'faq_notifications', question: 'O cliente recebe e‑mail/WhatsApp de confirmação?', answer: 'Sim. A plataforma envia confirmações e lembretes por e‑mail (e WhatsApp quando disponível). Confira os logs em Comunicações do cliente.' },
+    { id: 'faq_notifications', question: 'O cliente recebe e‑mail de confirmação?', answer: 'Sim. A plataforma envia confirmações e lembretes por e‑mail via SMTP seguro. Confira os logs em Comunicações do cliente.' },
         { id: 'faq_availability', question: 'Como ajusto minha disponibilidade e bloqueios?', answer: 'Em Disponibilidade, defina dias/intervalos de atendimento e crie exceções (férias, eventos) para impedir novos agendamentos nesses períodos.' },
         { id: 'faq_reschedule', question: 'Como remarcar ou cancelar um agendamento?', answer: `
           <div class="help-remarcar-cancelar">
@@ -427,7 +427,7 @@ const HelpCenter: React.FC = () => {
         { id: 'faq_payment_local', question: 'Como configuro a opção "Pagamento no Local"?', answer: 'Ao criar ou editar um serviço em `Serviços`, na seção de pagamento, basta **não selecionar** a opção "Exigir pagamento online". Isso permitirá que seus clientes agendem sem pagar adiantado. O pagamento será gerenciado por você no momento do atendimento.' },
         { id: 'faq_refund', question: 'Como faço para emitir um reembolso?', answer: 'O reembolso de pagamentos online deve ser feito diretamente no painel do seu gateway de pagamento (Stripe ou Mercado Pago). Após realizar o estorno por lá, recomendamos alterar o status do agendamento para "Cancelado" e, se desejar, adicionar uma nota interna no `Financeiro` para manter seus registros organizados.' },
         { id: 'faq_marketing_ai', question: 'O que é e como usar o "Marketing AI"?', answer: 'O "Marketing AI" é seu assistente de criação de conteúdo. Ele usa inteligência artificial para gerar textos para posts de redes sociais, e-mails promocionais e anúncios. Acesse `Marketing > Marketing AI`, descreva o objetivo da sua campanha e deixe a IA criar sugestões para você.' },
-        { id: 'faq_email_templates', question: 'Como funcionam os templates de e-mail e a integração com o Brevo?', answer: 'Você pode personalizar os e-mails de confirmação, lembrete e cancelamento em `Marketing > Templates de E-mail`. A Agendiia cuida do envio padrão. Para campanhas avançadas e maior controle, você pode conectar sua conta Brevo (antiga Sendinblue) e usar seus próprios remetentes e templates.' },
+    { id: 'faq_email_templates', question: 'Como funcionam os templates de e-mail?', answer: 'Você pode personalizar os e-mails de confirmação, lembrete e cancelamento em `Marketing > Templates de E-mail`. O envio é feito automaticamente via SMTP seguro configurado na plataforma.' },
         { id: 'faq_service_buffer', question: 'Como adicionar um "intervalo" ou "tempo de preparação" entre os atendimentos?', answer: 'Atualmente, a melhor forma de garantir um intervalo é ajustar a duração do seu serviço para incluir o tempo de preparação. Por exemplo, se um atendimento dura 50 minutos e você precisa de 10 minutos para preparar, cadastre o serviço com duração de 60 minutos. Estamos trabalhando em uma função específica para intervalos.' },
         { id: 'faq_resource_management', question: 'O que é a "Gestão de Recursos" e como utilizá-la?', answer: 'A Gestão de Recursos é ideal para negócios que possuem equipamentos ou salas limitadas (ex: uma maca de massagem, uma sala de reunião). Em `Configurações > Recursos`, você pode cadastrar seus recursos. Depois, ao criar um serviço, você pode associá-lo a um recurso específico. O sistema então bloqueará agendamentos para outros serviços que usem o mesmo recurso no mesmo horário.' },
         { id: 'faq_palette_selector', question: 'Posso personalizar as cores da minha página de agendamento?', answer: 'Sim! Para alinhar a página de agendamento com a sua marca, vá em `Configurações > Paleta de Cores`. Lá você pode escolher entre paletas pré-definidas ou criar a sua, alterando as cores principais que seus clientes verão.' },
@@ -530,12 +530,8 @@ const HelpCenter: React.FC = () => {
                 {activeTab === 'support' && (
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-md">
                         <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">Fale com o Suporte</h2>
-                        <p className="text-gray-600 dark:text-gray-300 mb-4">Entre em contato conosco pelo WhatsApp ou e‑mail:</p>
+                        <p className="text-gray-600 dark:text-gray-300 mb-4">Entre em contato conosco por e‑mail:</p>
                         <div className="space-y-3">
-                            <a href="https://wa.me/5551981304994" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-3 px-4 py-3 rounded-lg bg-green-50 text-green-800 dark:bg-green-900/20 dark:text-green-300 hover:brightness-95">
-                                <span className="font-semibold">WhatsApp</span>
-                                <span className="text-sm">+55 51 98130-4994</span>
-                            </a>
                             <a href="mailto:contato@agendiia.com.br" className="inline-flex items-center gap-3 px-4 py-3 rounded-lg bg-indigo-50 text-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 hover:brightness-95">
                                 <span className="font-semibold">E‑mail</span>
                                 <span className="text-sm">contato@agendiia.com.br</span>

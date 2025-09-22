@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Client, ClientCategory, Appointment, AppointmentStatus, CommunicationLog, CommunicationType, Service } from '../types';
 import { generateClientSummary, generateClientCommunication } from '../services/geminiService';
-import { sendEmail, sendWhatsApp } from '../services/brevoService';
+import { sendEmail } from '../services/brevoService';
 import { User, DollarSign, Tag, TrendingUp, MoreVertical, FileUp, Calendar, Clock, Sparkles, Loader, X, MessageCircle, FileText, Mail, Check, AlertTriangle, Filter, Plus, Package as PackageIcon, Search, Send } from './Icons';
 import { db } from '@/services/firebase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -651,7 +651,7 @@ const ClientCommunicationModal: React.FC<{
     onSendSuccess: (log: Omit<CommunicationLog, 'id'>) => void;
 }> = ({ client, type, lastAppointment, onClose, onSendSuccess }) => {
     const [isLoading, setIsLoading] = useState(true);
-    const [isSending, setIsSending] = useState<'email' | 'whatsapp' | null>(null);
+    const [isSending, setIsSending] = useState<'email' | null>(null);
     const [comm, setComm] = useState({ subject: '', body: '' });
     const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
@@ -673,7 +673,7 @@ const ClientCommunicationModal: React.FC<{
         generateComm();
     }, [client, type, lastAppointment]);
 
-    const handleSend = async (channel: 'email' | 'whatsapp') => {
+    const handleSend = async (channel: 'email') => {
         if (!comm.body) return;
         setIsSending(channel);
         setStatusMessage(null);
@@ -696,31 +696,6 @@ const ClientCommunicationModal: React.FC<{
             } finally {
                 setIsSending(null);
             }
-        } else if (channel === 'whatsapp') {
-            if (!client.phone) {
-                setStatusMessage({ type: 'error', text: 'O número de telefone do cliente não foi encontrado.' });
-                setIsSending(null);
-                return;
-            }
-            
-            const cleanedPhone = client.phone.replace(/\D/g, '');
-            const message = encodeURIComponent(comm.body);
-            const whatsappUrl = `https://wa.me/${cleanedPhone}?text=${message}`;
-            
-            window.open(whatsappUrl, '_blank');
-            setStatusMessage({ type: 'success', text: 'WhatsApp aberto para envio manual.' });
-            
-            onSendSuccess({
-                channel: 'WhatsApp',
-                type: type,
-                content: comm.body,
-                date: new Date(),
-            });
-
-            setTimeout(() => {
-                setIsSending(null);
-                onClose();
-            }, 3000);
         }
     };
 
@@ -743,11 +718,7 @@ const ClientCommunicationModal: React.FC<{
 
                 <div className="mt-6 flex flex-col sm:flex-row justify-end gap-3">
                     <button type="button" onClick={onClose} className="py-2 px-4 rounded-lg bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-500 order-last sm:order-first">Fechar</button>
-                    <button onClick={() => handleSend('whatsapp')} disabled={isLoading || isSending !== null} className="py-2 px-4 rounded-lg bg-green-500 text-white font-semibold hover:bg-green-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
-                       {isSending === 'whatsapp' ? <Loader className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
-                       Enviar por WhatsApp
-                    </button>
-                    <button onClick={() => handleSend('email')} disabled={isLoading || isSending !== null} className="py-2 px-4 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                          <button onClick={() => handleSend('email')} disabled={isLoading || isSending !== null} className="py-2 px-4 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed">
                        {isSending === 'email' ? <Loader className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                        Enviar por E-mail
                     </button>

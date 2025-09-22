@@ -24,6 +24,25 @@ import { userRateLimiter, adminRateLimiter, applyRateLimit, checkPlanLimits } fr
 
 admin.initializeApp();
 
+// --- Messaging settings helper ---
+type MessagingSettings = {
+  pauseAllEmails?: boolean;
+  pauseAllWhatsapp?: boolean;
+  cooldownUpdateSec?: number; // default 60
+  maxAttemptsPerChannel?: number; // default 3
+  useCollectionGroupDailyReminders?: boolean; // default false
+};
+
+async function getMessagingSettings(): Promise<MessagingSettings> {
+  try {
+    const snap = await admin.firestore().doc('platform/settings').get();
+    const data = snap.exists ? (snap.data() as any) : {};
+    return (data.messaging || {}) as MessagingSettings;
+  } catch {
+    return {} as MessagingSettings;
+  }
+}
+
 // --- WhatsApp (W-API) helpers ---
 type WhatsAppConfig = {
   enabled?: boolean;
@@ -124,6 +143,13 @@ export const diagnoseWhatsApp = onCall({ region: 'us-central1' }, async () => {
 // Callable: send a WhatsApp message via W-API
 export const sendWhatsAppMessage = onCall({ region: 'us-central1' }, async (req) => {
   const { to, message } = (req.data || {}) as { to?: string; message?: string };
+  // Soft rate-limit per authenticated user (no-op for anonymous to preserve existing flows)
+  try {
+    const uid = (req as any)?.auth?.uid;
+    if (uid) await applyRateLimit(uid, 'sendWhatsAppMessage');
+  } catch (rlErr) {
+    throw rlErr;
+  }
   if (!to || !message) throw new HttpsError('invalid-argument', 'Parâmetros to e message são obrigatórios');
   const result = await sendWhatsAppViaWapi(to, message);
   return { ok: result.ok, response: result.response };
@@ -252,8 +278,12 @@ function formatDateTimePtBR(d: Date) {
 }
 
 function applyTemplate(template: string, vars: Record<string,string>) {
-  console.log('applyTemplate - Template original:', template);
-  console.log('applyTemplate - Variáveis disponíveis:', vars);
+  const verbose = (process.env.MESSAGING_VERBOSE_LOGS || '').toLowerCase();
+  const doLog = verbose === '1' || verbose === 'true';
+  if (doLog) {
+    console.log('applyTemplate - Template original:', template);
+    console.log('applyTemplate - Variáveis disponíveis:', vars);
+  }
   let out = template;
   for (const k of Object.keys(vars)) {
     // Usar regex para fazer a substituição global e case-insensitive
@@ -261,10 +291,10 @@ function applyTemplate(template: string, vars: Record<string,string>) {
     const escapedToken = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(escapedToken, 'g');
     const replacement = vars[k] ?? '';
-    console.log(`applyTemplate - Substituindo ${token} por "${replacement}"`);
+    if (doLog) console.log(`applyTemplate - Substituindo ${token} por "${replacement}"`);
     out = out.replace(regex, replacement);
   }
-  console.log('applyTemplate - Resultado final:', out);
+  if (doLog) console.log('applyTemplate - Resultado final:', out);
   return out;
 }
 
@@ -355,6 +385,13 @@ export const createMercadoPagoPreference = onCall({
 // Callable to send transactional email (SMTP-only)
 export const sendTransactionalEmail = onCall({ region: 'us-central1' }, async (request) => {
   const { toEmail, toName, subject, html } = (request?.data || {}) as any;
+  // Soft rate-limit per authenticated user
+  try {
+    const uid = (request as any)?.auth?.uid;
+    if (uid) await applyRateLimit(uid, 'sendTransactionalEmail');
+  } catch (rlErr) {
+    throw rlErr;
+  }
   if (!toEmail || !subject || !html) {
     throw new HttpsError('invalid-argument', 'Parâmetros obrigatórios ausentes.');
   }
@@ -488,9 +525,19 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       return;
     }
     const data = snap.data() as any;
+    const msgSettings = await getMessagingSettings();
+    if (msgSettings.pauseAllEmails) {
+      console.log('[onAppointmentCreated] Emails pausados via settings, skipping email sends');
+    }
+    if (msgSettings.pauseAllWhatsapp) {
+      console.log('[onAppointmentCreated] WhatsApp pausado via settings, skipping WA sends');
+    }
+    // Fresh read to ensure idempotency against at-least-once delivery
+    let current = data;
+    try { const fresh = await snap.ref.get(); if (fresh.exists) current = { ...data, ...(fresh.data() as any) }; } catch {}
 
     // ANTI-LOOP: Check if confirmation emails were already sent
-    if (data.confirmationEmailStatus === 'sent' && data.professionalNotificationStatus === 'sent') {
+    if (current.confirmationEmailStatus === 'sent' && current.professionalNotificationStatus === 'sent') {
       console.log(`[onAppointmentCreated] LOOP PREVENTION: Both confirmation emails already sent, skipping.`);
       return;
     }
@@ -539,28 +586,49 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       if (tProf?.body) profBodyTemplate = tProf.body;
     }
 
+    const dateBR = dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const timeBR = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
     const vars: any = {
+      // Canonical keys
       clientName,
       professionalName,
       serviceName,
-      appointmentDate: dt.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-      appointmentTime: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      appointmentDate: dateBR,
+      appointmentTime: timeBR,
       dateTime: formatDateTimePtBR(dt),
+      date: dateBR,
+      time: timeBR,
+      // Portuguese aliases used by existing templates
+      'nome do cliente': clientName,
+      'nome do profissional': professionalName,
+      'nome do serviço': serviceName,
+      'data': dateBR,
+      'horário': timeBR,
     };
 
     // Send email to client if available
-    if (clientEmail) {
+    // Attempt counters (small caps) to avoid repeated failures burning cost
+  const maxAttempts = Number(msgSettings.maxAttemptsPerChannel ?? 3);
+    const clientAttempts = Number(current.confirmationEmailAttemptCount || 0);
+    const profAttempts = Number(current.professionalNotificationAttemptCount || 0);
+    const waAttempts = Number(current.whatsappConfirmationAttemptCount || 0);
+
+  if (!msgSettings.pauseAllEmails && clientEmail && current.confirmationEmailStatus !== 'sent' && clientAttempts < maxAttempts) {
       try {
         const html = applyTemplate(clientBody, vars);
         const subj = applyTemplate(clientSubject, vars);
         const msgId = await sendEmail(clientEmail, clientName, subj, html);
-        await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await snap.ref.set({ confirmationEmailStatus: 'sent', confirmationEmailId: msgId || null, confirmationEmailAttemptCount: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       } catch (err: any) {
         console.warn('onAppointmentCreated: failed to send confirmation email to client', err);
-        try { await snap.ref.set({ confirmationEmailStatus: 'error', confirmationEmailError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+        try { await snap.ref.set({ confirmationEmailStatus: 'error', confirmationEmailError: err?.message || String(err), confirmationEmailAttemptCount: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
       }
     } else {
-      try { await snap.ref.set({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      if (!clientEmail) {
+        try { await snap.ref.set({ confirmationEmailStatus: 'skipped_no_client_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      } else if (clientAttempts >= maxAttempts) {
+        try { await snap.ref.set({ confirmationEmailStatus: 'skipped_max_attempts', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      }
     }
 
     // Optional WhatsApp notification (W-API) — controlled by platform/settings.whatsapp
@@ -570,15 +638,25 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
       const waCfg = settings.whatsapp as any;
       const waEnabled = !!waCfg?.enabled;
       const sendOnBooking = !!waCfg?.sendOnBooking; // feature flag
-      const clientPhone: string | undefined = (data.clientPhone || data.phone || '').toString();
-      if (waEnabled && sendOnBooking && clientPhone && data.whatsappConfirmationStatus !== 'sent') {
+      const clientPhone: string | undefined = (current.clientPhone || current.phone || data.clientPhone || data.phone || '').toString();
+  if (!msgSettings.pauseAllWhatsapp && waEnabled && sendOnBooking && clientPhone && current.whatsappConfirmationStatus !== 'sent' && waAttempts < maxAttempts) {
         try {
-          const waMsg = applyTemplate(`Olá {clientName}! Seu agendamento de {serviceName} está confirmado para {dateTime}.`, vars);
+          // Load optional WhatsApp-specific template from automations
+          let waTemplateBody = `Olá {clientName}! Seu agendamento de {serviceName} está confirmado para {dateTime}.`;
+          try {
+            const autoSnap2 = await admin.firestore().doc('platform/automations').get();
+            if (autoSnap2.exists) {
+              const au2: any = autoSnap2.data();
+              const tWa = Array.isArray(au2.templates) ? au2.templates.find((t: any) => t.id === 't_sched_whatsapp') : null;
+              if (tWa?.body) waTemplateBody = tWa.body;
+            }
+          } catch {}
+          const waMsg = applyTemplate(waTemplateBody, vars);
           await sendWhatsAppViaWapi(clientPhone, waMsg);
-          try { await snap.ref.set({ whatsappConfirmationStatus: 'sent', whatsappConfirmationAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+          try { await snap.ref.set({ whatsappConfirmationStatus: 'sent', whatsappConfirmationAt: admin.firestore.FieldValue.serverTimestamp(), whatsappConfirmationAttemptCount: admin.firestore.FieldValue.increment(1) }, { merge: true }); } catch {}
         } catch (waErr) {
           console.warn('onAppointmentCreated: WhatsApp send failed', waErr);
-          try { await snap.ref.set({ whatsappConfirmationStatus: 'error', whatsappConfirmationError: (waErr as any)?.message || String(waErr) }, { merge: true }); } catch {}
+          try { await snap.ref.set({ whatsappConfirmationStatus: 'error', whatsappConfirmationError: (waErr as any)?.message || String(waErr), whatsappConfirmationAttemptCount: admin.firestore.FieldValue.increment(1) }, { merge: true }); } catch {}
         }
       }
     } catch (waWrapErr) {
@@ -586,18 +664,22 @@ export const onAppointmentCreated = onDocumentCreated('users/{userId}/appointmen
     }
 
     // Notify professional (best-effort)
-    if (profEmail) {
+  if (!msgSettings.pauseAllEmails && profEmail && current.professionalNotificationStatus !== 'sent' && profAttempts < maxAttempts) {
       try {
         const profHtml = applyTemplate(profBodyTemplate, vars);
         const profSubj = applyTemplate(profSubject, vars);
         const pMsgId = await sendEmail(profEmail, professionalName, profSubj, profHtml);
-        try { await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+        try { await snap.ref.set({ professionalNotificationStatus: 'sent', professionalNotificationId: pMsgId || null, professionalNotificationAttemptCount: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
       } catch (err: any) {
         console.warn('onAppointmentCreated: failed to notify professional', err);
-        try { await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: err?.message || String(err), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+        try { await snap.ref.set({ professionalNotificationStatus: 'error', professionalNotificationError: err?.message || String(err), professionalNotificationAttemptCount: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
       }
     } else {
-      try { await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      if (!profEmail) {
+        try { await snap.ref.set({ professionalNotificationStatus: 'skipped_no_professional_email', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      } else if (profAttempts >= maxAttempts) {
+        try { await snap.ref.set({ professionalNotificationStatus: 'skipped_max_attempts', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch {}
+      }
     }
 
   } catch (e) {
@@ -628,11 +710,13 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
       'updateEmailStatus', 'updateEmailId', 'updateEmailError',
       'professionalNotificationStatus', 'professionalNotificationId', 'professionalNotificationError',
       'confirmationEmailStatus', 'confirmationEmailId', 'confirmationEmailError',
+      // WhatsApp confirmation (booking path)
+      'whatsappConfirmationStatus', 'whatsappConfirmationAt', 'whatsappConfirmationError',
       // Reminder flags and locks
       'reminder24hSent', 'reminder24hSending', 'reminder24hError', 'reminder24hErrorAt',
       'reminder3hSent', 'reminder3hSending', 'reminder3hError', 'reminder3hErrorAt',
       // Generic housekeeping
-      'updatedAt', 'createdAt', 'emailUpdateCount', 'mpPreferenceId'
+      'updatedAt', 'createdAt', 'emailUpdateCount', 'mpPreferenceId', 'lastUpdateEmailAt'
     ];
     statusFields.forEach(f => {
       delete beforeCopy[f];
@@ -660,6 +744,18 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
       console.log('[onAppointmentUpdated] Skip: No meaningful field changed.', { changedKeys });
       return;
     }
+
+    const msgSettings = await getMessagingSettings();
+    const cooldownMs = Math.max(0, Number((msgSettings.cooldownUpdateSec ?? 60)) * 1000);
+    // COOLDOWN: Prevent multiple update emails within configurable window
+    try {
+      const lastAt = (data as any).lastUpdateEmailAt;
+      const lastDate: Date | null = lastAt?.toDate ? lastAt.toDate() : (lastAt ? new Date(lastAt) : null);
+      if (cooldownMs > 0 && lastDate && (Date.now() - lastDate.getTime()) < cooldownMs) {
+        console.log('[onAppointmentUpdated] Cooldown active (<60s since last update email). Skipping.');
+        return;
+      }
+    } catch {}
 
     // SAFETY NET: Add a counter check to prevent infinite loops if logic fails
     const emailUpdateCount = data.emailUpdateCount || 0;
@@ -690,11 +786,12 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
 
     const updatePayload: any = {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      emailUpdateCount: admin.firestore.FieldValue.increment(1) // Increment the counter
+      emailUpdateCount: admin.firestore.FieldValue.increment(1), // Increment the counter
+      lastUpdateEmailAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
-    // 1. Handle Client Email
-    if (clientEmail) {
+  // 1. Handle Client Email (honor kill switch)
+  if (!msgSettings.pauseAllEmails && clientEmail) {
       const clientTmpl = autoData.templates?.find((t: any) => t.id === 't_sched_update') || {
         subject: 'Seu agendamento foi atualizado!',
         body: 'Olá {clientName}, seu agendamento para {serviceName} em {dateTime} foi atualizado.',
@@ -713,9 +810,9 @@ export const onAppointmentUpdated = onDocumentUpdated('users/{userId}/appointmen
       updatePayload.updateEmailStatus = 'skipped_no_client_email';
     }
 
-    // 2. Handle Professional Notification
+  // 2. Handle Professional Notification (honor kill switch)
     const profEmail = (await admin.auth().getUser(userId).catch(() => null))?.email;
-    if (profEmail) {
+  if (!msgSettings.pauseAllEmails && profEmail) {
       const profTmpl = autoData.templates?.find((t: any) => t.id === 't_sched_update_professional') || {
         subject: 'Agendamento atualizado: {clientName}',
         body: 'O agendamento de {clientName} para {serviceName} em {dateTime} foi atualizado.',
@@ -759,38 +856,69 @@ export const sendDailyReminders = onSchedule({ schedule: 'every 60 minutes', tim
   const tsEnd = admin.firestore.Timestamp.fromDate(in24_5h);
   console.log(`[${event.jobName}] V4 START: Range: ${tsStart.toDate().toISOString()} to ${tsEnd.toDate().toISOString()}`);
 
+  // Honor global kill switch for emails
+  const msgSettings = await getMessagingSettings();
+  if (msgSettings.pauseAllEmails) {
+    console.log(`[${event.jobName}] V4 PAUSED: pauseAllEmails=true. Skipping job.`);
+    return;
+  }
+
   let appointmentDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
 
-  // TEMPORARY: Use only fallback until indices are built
-  console.log(`[${event.jobName}] V4 USING_FALLBACK_ONLY: CollectionGroup disabled temporarily.`);
-  try {
-    const usersSnapshot = await db.collection('users').get();
-    console.log(`[${event.jobName}] V4 FALLBACK_INFO: Scanning ${usersSnapshot.size} users.`);
-    
-    const promises = usersSnapshot.docs.map(userDoc => 
-      db.collection(`users/${userDoc.id}/appointments`)
+  // Choose source based on flag: collectionGroup or fallback per-user scan
+  const useCg = !!msgSettings.useCollectionGroupDailyReminders;
+  if (useCg) {
+    try {
+      console.log(`[${event.jobName}] V4 USING_COLLECTION_GROUP: Querying appointments CG.`);
+      const qs = await db.collectionGroup('appointments')
         .where('dateTime', '>=', tsStart)
         .where('dateTime', '<=', tsEnd)
-        .get()
-        .then(userAppointments => {
-          if (!userAppointments.empty) {
-            console.log(`[${event.jobName}] V4 FALLBACK_USER_SUCCESS: Found ${userAppointments.size} for user ${userDoc.id}`);
-            return userAppointments.docs;
-          }
-          return [];
-        })
-        .catch(userErr => {
-          console.warn(`[${event.jobName}] V4 CATCH_FALLBACK_USER: Failed for user ${userDoc.id}`, userErr);
-          return [];
-        })
-    );
-    
-    const results = await Promise.all(promises);
-    appointmentDocs = results.flat();
-    console.log(`[${event.jobName}] V4 SUCCESS_FALLBACK: Fallback scan finished. Total appointments: ${appointmentDocs.length}`);
-  } catch (fallbackErr) {
-    console.error(`[${event.jobName}] V4 CATCH_FALLBACK: The entire fallback scan failed.`, fallbackErr);
-    return; 
+        .get();
+      appointmentDocs = qs.docs;
+      console.log(`[${event.jobName}] V4 CG_SUCCESS: Found ${appointmentDocs.length} appointments.`);
+    } catch (cgErr) {
+      console.error(`[${event.jobName}] V4 CG_CATCH: CollectionGroup query failed, falling back.`, cgErr);
+      // Fall back to per-user scan
+      try {
+        const usersSnapshot = await db.collection('users').get();
+        console.log(`[${event.jobName}] V4 FALLBACK_INFO: Scanning ${usersSnapshot.size} users.`);
+        const promises = usersSnapshot.docs.map(userDoc => 
+          db.collection(`users/${userDoc.id}/appointments`)
+            .where('dateTime', '>=', tsStart)
+            .where('dateTime', '<=', tsEnd)
+            .get()
+            .then(userAppointments => userAppointments.docs)
+            .catch(() => [])
+        );
+        const results = await Promise.all(promises);
+        appointmentDocs = results.flat();
+        console.log(`[${event.jobName}] V4 SUCCESS_FALLBACK: Fallback scan finished. Total appointments: ${appointmentDocs.length}`);
+      } catch (fallbackErr) {
+        console.error(`[${event.jobName}] V4 CATCH_FALLBACK: The entire fallback scan failed.`, fallbackErr);
+        return;
+      }
+    }
+  } else {
+    // Fallback per-user scan (default behavior)
+    console.log(`[${event.jobName}] V4 USING_FALLBACK: CollectionGroup disabled.`);
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      console.log(`[${event.jobName}] V4 FALLBACK_INFO: Scanning ${usersSnapshot.size} users.`);
+      const promises = usersSnapshot.docs.map(userDoc => 
+        db.collection(`users/${userDoc.id}/appointments`)
+          .where('dateTime', '>=', tsStart)
+          .where('dateTime', '<=', tsEnd)
+          .get()
+          .then(userAppointments => userAppointments.docs)
+          .catch(() => [])
+      );
+      const results = await Promise.all(promises);
+      appointmentDocs = results.flat();
+      console.log(`[${event.jobName}] V4 SUCCESS_FALLBACK: Fallback scan finished. Total appointments: ${appointmentDocs.length}`);
+    } catch (fallbackErr) {
+      console.error(`[${event.jobName}] V4 CATCH_FALLBACK: The entire fallback scan failed.`, fallbackErr);
+      return;
+    }
   }
 
   if (appointmentDocs.length === 0) {

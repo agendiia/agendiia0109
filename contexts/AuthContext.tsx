@@ -11,11 +11,10 @@ import {
   updateProfile,
   signOut,
   sendPasswordResetEmail,
-  sendEmailVerification,
   reload,
   type User,
 } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, getDoc, updateDoc } from 'firebase/firestore';
 
 type SubscriptionPlanName = 'Profissional' | 'Avançado';
 
@@ -149,8 +148,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     // atualiza displayName
     await updateProfile(cred.user, { displayName: name || '' });
-    // envia verificação por email (se desejado)
-    await sendEmailVerification(cred.user);
+    // não enviar verificação por email
     // cria documento do usuário com telefone
     await setDoc(doc(db, 'users', cred.user.uid), {
       uid: cred.user.uid,
@@ -202,7 +200,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const sendVerification = async () => {
     if (!auth.currentUser) return;
-    await sendEmailVerification(auth.currentUser);
+    // verificação de email desabilitada
   };
 
   const reloadUser = async () => {

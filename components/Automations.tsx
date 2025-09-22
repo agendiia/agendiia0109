@@ -1,6 +1,5 @@
 
 import React, { useEffect, useState } from 'react';
-import { BrevoSettings } from '../types';
 import { Bell, Edit } from './Icons';
 import { db } from '../services/firebase';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -93,23 +92,12 @@ const initialFeatureAccess: FeatureAccess = {
 
 const Automations: React.FC = () => {
     const { user } = useAuth();
-    const [settings, setSettings] = useState<BrevoSettings>({ apiKey: '', isConnected: false, senderEmail: '', senderName: '' });
     const [saving, setSaving] = useState(false);
     const [statusMsg, setStatusMsg] = useState<string>('');
 
-    // Load Brevo settings and automations from Firestore (platform-level)
+    // Load automations from Firestore (platform-level)
     useEffect(() => {
         const load = async () => {
-            try {
-                const ref = doc(db, 'platform', 'brevo');
-                const snap = await getDoc(ref);
-                if (snap.exists()) {
-                    const data = snap.data() as any;
-                    setSettings({ apiKey: data.apiKey || '', isConnected: !!data.isConnected, senderEmail: data.senderEmail || '', senderName: data.senderName || '' });
-                }
-            } catch (e) {
-                // ignore load errors in UI
-            }
             try {
                 const autoRef = doc(db, 'platform', 'automations');
                 const autoSnap = await getDoc(autoRef);
@@ -134,27 +122,7 @@ const Automations: React.FC = () => {
     const [templates, setTemplates] = useState<Template[]>(initialTemplates);
     const [featureAccess, setFeatureAccess] = useState<FeatureAccess>(initialFeatureAccess);
 
-    const handleConnect = async () => {
-        if (!settings.apiKey?.trim()) {
-            setStatusMsg('Por favor, insira uma chave de API.');
-            return;
-        }
-        // Persist to Firestore (platform/brevo)
-        try {
-            setSaving(true);
-            const ref = doc(db, 'platform', 'brevo');
-            await setDoc(ref, { apiKey: settings.apiKey.trim(), isConnected: true, updatedAt: serverTimestamp() }, { merge: true });
-            await setDoc(ref, { apiKey: settings.apiKey.trim(), isConnected: true, senderEmail: settings.senderEmail || '', senderName: settings.senderName || '', updatedAt: serverTimestamp() }, { merge: true });
-            setSettings(s => ({ ...s, isConnected: true }));
-            setStatusMsg('Chave Brevo salva e conexão ativada.');
-            setTimeout(() => setStatusMsg(''), 3000);
-        } catch (e) {
-            setStatusMsg('Erro ao salvar a chave Brevo.');
-        } finally {
-            setSaving(false);
-        }
-    }
-    
+    // SMTP-only: no external provider connection needed
     const handleTemplateChange = (id: string, field: 'subject' | 'body', value: string) => {
         setTemplates(templates.map(t => t.id === id ? { ...t, [field]: value } : t));
     };
@@ -253,46 +221,14 @@ const Automations: React.FC = () => {
 
     return (
         <div className="space-y-8">
-            {/* API Configuration */}
+            {/* SMTP-only notice */}
             <div className="bg-gray-50 dark:bg-gray-900/50 p-6 rounded-xl border border-gray-200 dark:border-gray-700">
-                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Configuração da API Brevo</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 mb-4">Insira sua chave de API v3 da Brevo para habilitar o envio de e-mails.</p>
-                <div className="flex flex-col sm:flex-row items-center gap-4">
-                <div className="flex flex-col gap-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <input
-                            type="text"
-                            placeholder="Nome do Remetente (ex: Agendiia)"
-                            value={settings.senderName || ''}
-                            onChange={(e) => setSettings(s => ({...s, senderName: e.target.value }))}
-                            className="w-full p-2 rounded-md bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600"
-                        />
-                        <input
-                            type="email"
-                            placeholder="E-mail do Remetente (verificado na Brevo)"
-                            value={settings.senderEmail || ''}
-                            onChange={(e) => setSettings(s => ({...s, senderEmail: e.target.value }))}
-                            className="w-full p-2 rounded-md bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600"
-                        />
-                    </div>
-                    <input
-                        type="password"
-                        placeholder="sua-api-key-da-brevo"
-                        value={settings.apiKey}
-                        onChange={(e) => setSettings(s => ({...s, apiKey: e.target.value, isConnected: false}))}
-                        className="flex-grow w-full p-2 rounded-md bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600"
-                    />
-                    <div className="flex items-center gap-3">
-                    <button onClick={handleConnect} disabled={saving} className="bg-indigo-600 text-white font-semibold py-2 px-5 rounded-lg shadow-md hover:bg-indigo-700 disabled:opacity-60">
-                        {saving ? 'Salvando...' : 'Salvar e Conectar'}
-                    </button>
-                    <span className={`px-3 py-1 text-xs font-bold rounded-full ${settings.isConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                        {settings.isConnected ? 'Conectado' : 'Desconectado'}
-                    </span>
-                    {statusMsg && <span className="text-sm text-gray-600 dark:text-gray-300">{statusMsg}</span>}
-                    </div>
-                </div>
-            </div>
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Envio de E-mail (SMTP)</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                    O envio de e-mails agora é feito exclusivamente via SMTP (Hostinger). Configure os campos em <code>platform/settings.smtp</code> no Firestore:
+                    <span className="ml-1">host, port, secure, user, pass, fromName, fromEmail.</span>
+                </p>
+                {statusMsg && <p className="text-sm mt-2 text-gray-600 dark:text-gray-300">{statusMsg}</p>}
             </div>
 
             {/* Transactional Email Templates */}

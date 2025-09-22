@@ -72,19 +72,19 @@ async function testReminders() {
       console.error('❌ Fallback também falhou:', fallbackErr);
     }
   }
-  
-  // Verificar configuração do Brevo
-  console.log('\n📧 Verificando configuração Brevo...');
+  // SMTP agora é configurado em platform/settings.smtp (Firestore)
+  console.log('\n✉️ Verificando configuração SMTP...');
   try {
-    const brevoDoc = await db.doc('platform/brevo').get();
-    if (brevoDoc.exists()) {
-      const config = brevoDoc.data();
-      console.log(`✅ Brevo configurado: API Key ${config.apiKey ? 'OK' : 'FALTA'}, Sender: ${config.senderEmail || 'não definido'}`);
+    const settings = await db.doc('platform/settings').get();
+    const data = settings.exists ? settings.data() : {};
+    const smtp = (data && data.smtp) || {};
+    if (smtp.host && smtp.user && smtp.pass) {
+      console.log(`✅ SMTP configurado: host=${smtp.host}, user=${smtp.user}, from=${smtp.fromEmail || '(não definido)'}`);
     } else {
-      console.log('❌ Documento platform/brevo não existe');
+      console.log('❌ SMTP incompleto. Preencha host, user e pass em platform/settings.smtp');
     }
-  } catch (brevoErr) {
-    console.error('❌ Erro ao verificar Brevo:', brevoErr);
+  } catch (smtpErr) {
+    console.error('❌ Erro ao verificar SMTP:', smtpErr);
   }
   
   process.exit(0);

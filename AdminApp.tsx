@@ -93,9 +93,7 @@ const AdminApp: React.FC = () => {
     return <AuthPage />;
   }
 
-  if (!user.emailVerified) {
-    return <VerifyEmail />;
-  }
+  // permitir acesso ao admin mesmo sem email verificado
 
   if (allowed === null) {
     return (

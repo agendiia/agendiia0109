@@ -167,9 +167,7 @@ const App: React.FC = () => {
     return <AuthPage />;
   }
 
-  if (user && !user.emailVerified) {
-    return <VerifyEmail />;
-  }
+  // permitir acesso mesmo sem email verificado
 
   return (
     <BrowserRouter>

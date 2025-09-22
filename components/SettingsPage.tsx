@@ -25,7 +25,9 @@ const SettingsPage: React.FC = () => {
                 const snap = await getDoc(settingsRef);
                 const data: any = snap.exists() ? snap.data() : {};
                 const s = data?.settings || {};
-                setNotifications({ email: Boolean(s.notifications?.email ?? true) });
+                setNotifications({ 
+                    email: Boolean(s.notifications?.email ?? true)
+                });
                 setRecoveryContact(s.recoveryContact || '');
 
                 // Load professional profile fields (users/{uid}/profile/main)
@@ -53,7 +55,13 @@ const SettingsPage: React.FC = () => {
         if (!user) return alert('Usuário não autenticado.');
         try {
             const ref = doc(db, 'users', user.uid);
-            await setDoc(ref, { settings: { notifications: { ...notifications }, recoveryContact } }, { merge: true });
+            await setDoc(ref, { 
+                settings: { 
+                    notifications: { ...notifications }, 
+                    recoveryContact 
+                },
+                phone: profilePhone // Salva o telefone no documento principal do usuário
+            }, { merge: true });
             alert('Configurações salvas.');
         } catch (err) {
             console.error('Failed to save settings', err);
@@ -157,7 +165,11 @@ const SettingsPage: React.FC = () => {
                     <div className="space-y-2">
                         <div className="mt-2">
                             <label className="block text-sm font-medium">Notificações</label>
-                            <label className="flex items-center gap-2"><input type="checkbox" checked={notifications.email} onChange={(e) => setNotifications(n => ({ ...n, email: e.target.checked }))} /> Receber notificações por email</label>
+                            <label className="flex items-center gap-2">
+                                <input type="checkbox" checked={notifications.email} onChange={(e) => setNotifications(n => ({ ...n, email: e.target.checked }))} /> 
+                                Receber notificações por email
+                            </label>
+                            {/* WhatsApp notifications removidas */}
                         </div>
                     </div>
 

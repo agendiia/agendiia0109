@@ -383,7 +383,7 @@ const ResourceManagement: React.FC = () => {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
               <Bell className="w-5 h-5 mr-2" />
-              Email Usage (Brevo)
+              Email Usage (SMTP)
             </h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="text-center">

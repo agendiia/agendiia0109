@@ -93,6 +93,13 @@ const AuthPage: React.FC = () => {
       if (isRegister) {
         // pass phone to register; cast to any to avoid TS signature mismatch if register has different typing
         await (register as any)(name.trim(), email.trim(), password, phone.trim());
+        // Mostrar mensagem de sucesso por um momento
+        setActionInfo('Conta criada com sucesso! Redirecionando para o login...');
+        // após cadastro, redirecionar para a tela de login
+        setTimeout(() => {
+          try { window.location.replace('/login'); } catch { window.location.href = '/login'; }
+        }, 1500);
+        return;
       } else {
         await login(email.trim(), password);
       }

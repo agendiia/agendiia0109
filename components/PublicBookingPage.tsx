@@ -1360,7 +1360,7 @@ const ConfirmBooking: React.FC<{
         if (import.meta.env.DEV) {
             try {
                 const functions = getFunctions(firebaseApp, 'us-central1');
-                const callable = httpsCallable(functions, 'sendBrevoEmail');
+                const callable = httpsCallable(functions, 'sendTransactionalEmail');
                 await callable({
                     toEmail: apptData.clientEmail,
                     toName: apptData.clientName,
@@ -1545,29 +1545,8 @@ const ConfirmBooking: React.FC<{
 };
 
 // --- STEP 5: BOOKING SUCCESS ---
-const BookingSuccess: React.FC<{onBookAnother: () => void, lastSelectedGateway?: string | null, professionalPhone?: string}> = ({ onBookAnother, lastSelectedGateway, professionalPhone }) => {
-    const buildWhatsAppLink = () => {
-        const phone = professionalPhone ? professionalPhone.replace(/[^0-9+]/g, '') : '';
-        const textParts = [
-            'Olá, eu acabei de realizar um agendamento e gostaria de enviar o comprovante de pagamento.',
-            'Nome:', '%7Bseu_nome%7D',
-            'Data/Horário:', '%7Bdata_horario%7D',
-            'Serviço:', '%7Bservico%7D',
-            'ID do Agendamento (se disponível): %7Bid_agendamento%7D',
-            '\n\nPor favor, confirme o recebimento. Obrigado!'
-        ];
-        const text = encodeURIComponent(textParts.join(' '));
-        if (phone) {
-            // Use wa.me short link
-            const normalized = phone.replace(/^\+/, '');
-            return `https://wa.me/${normalized}?text=${text}`;
-        }
-        // fallback to WhatsApp web with no number (user chooses contact)
-        return `https://web.whatsapp.com/send?text=${text}`;
-    };
-
-    const showWhatsApp = lastSelectedGateway === 'pix';
-    const showOtherButton = lastSelectedGateway !== 'mercadopago';
+const BookingSuccess: React.FC<{onBookAnother: () => void, lastSelectedGateway?: string | null, professionalPhone?: string}> = ({ onBookAnother, lastSelectedGateway }) => {
+    const showOtherButton = true;
 
     return (
         <div className="text-center py-10">
@@ -1575,12 +1554,6 @@ const BookingSuccess: React.FC<{onBookAnother: () => void, lastSelectedGateway?:
             <h2 className="text-2xl font-bold mb-2">Agendamento Realizado com Sucesso!</h2>
             <p className="text-gray-500 dark:text-gray-400 mb-6">Você receberá uma confirmação por e-mail com todos os detalhes. Obrigado!</p>
             <div className="flex items-center justify-center gap-4">
-                {showWhatsApp && (
-                    <a href={buildWhatsAppLink()} target="_blank" rel="noopener noreferrer" className="bg-green-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2">
-                        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.52 3.48A11.9 11.9 0 0012 0C5.373 0 0 5.373 0 12c0 2.11.55 4.09 1.6 5.86L0 24l6.48-1.66A11.95 11.95 0 0012 24c6.627 0 12-5.373 12-12 0-3.18-1.24-6.16-3.48-8.52zM12 21.5c-1.12 0-2.22-.18-3.27-.52l-.23-.08-3.85.99.98-3.76-.07-.25A9.47 9.47 0 012.5 12c0-5.25 4.25-9.5 9.5-9.5S21.5 6.75 21.5 12 17.25 21.5 12 21.5zM17.4 14.3c-.29-.15-1.72-.85-1.99-.95-.27-.1-.47-.15-.67.15s-.77.95-.94 1.15c-.17.2-.34.22-.63.07-.29-.15-1.22-.45-2.32-1.43-.86-.77-1.44-1.72-1.61-2.01-.17-.29-.02-.45.12-.6.12-.12.27-.3.41-.45.14-.15.19-.25.29-.42.1-.17.04-.31-.03-.45-.07-.14-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51l-.57-.01c-.19 0-.5.07-.77.34-.27.27-1.04 1.02-1.04 2.49 0 1.47 1.06 2.89 1.2 3.09.14.2 2.07 3.35 5.02 4.69 2.95 1.34 2.95.9 3.48.85.53-.05 1.72-.7 1.96-1.38.24-.68.24-1.26.17-1.38-.07-.12-.26-.19-.55-.34z"></path></svg>
-                        Enviar comprovante via WhatsApp
-                    </a>
-                )}
                 {showOtherButton && (
                     <button onClick={onBookAnother} className="bg-[var(--theme-color)] text-white font-bold py-3 px-6 rounded-lg hover:opacity-90 transition-opacity">
                         Fazer Outro Agendamento
